@@ -16,7 +16,7 @@ The package gives you three functions:
 
 ```r
 # install.packages("remotes")
-remotes::install_local("path/to/weather")   # this folder
+remotes::install_github("yyliou/weather")
 ```
 
 Core functions need only `jsonlite`. The township function additionally needs
