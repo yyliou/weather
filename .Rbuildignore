@@ -4,3 +4,5 @@
 ^\.gitattributes$
 ^README\.md$
 ^LICENSE\.md$
+^HEX-STICKER-GUIDE\.md$
+^make-logo\.R$
