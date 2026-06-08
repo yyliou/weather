@@ -1,4 +1,4 @@
-# twweather <img src="man/figures/logo.png" align="right" height="138" alt="twweather hex logo" />
+# twweather
 
 Download Taiwan historical weather observations from the NCHU
 [*CWB Historical Weather Data Downloader*](https://mycolab.pp.nchu.edu.tw/historical_weather/index.php),
