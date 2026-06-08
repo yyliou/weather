@@ -1,0 +1,26 @@
+Package: twweather
+Type: Package
+Title: Download Taiwan CWA Historical Weather Observations
+Version: 0.1.0
+Authors@R: person("Liou", "Yuyou", email = "yuyou.liou@gmail.com", role = c("aut", "cre"))
+Description: A thin wrapper around the NCHU "CWB Historical Weather Data
+    Downloader" (<https://mycolab.pp.nchu.edu.tw/historical_weather/>), which
+    redistributes Central Weather Administration (CWA / CODiS) station
+    observations. Provides three things: station metadata, station
+    measurement time series (hourly / daily / monthly), and an
+    aggregation of station data up to the township (鄉鎮) level by
+    reverse-geocoding each station's longitude/latitude into township
+    polygons (rainfall summed, other variables averaged).
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.3.1
+Depends: R (>= 4.0.0)
+Imports:
+    utils,
+    stats,
+    jsonlite
+Suggests:
+    sf,
+    testthat (>= 3.0.0)
+URL: https://mycolab.pp.nchu.edu.tw/historical_weather/index.php

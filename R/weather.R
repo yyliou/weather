@@ -1,0 +1,110 @@
+#' Download station weather observations
+#'
+#' Wraps the NCHU "CWB Historical Weather Data Downloader". You give it one or
+#' more station ids and a date range, and it returns the observation time
+#' series as a single data frame.
+#'
+#' Behind the scenes a single station id is served as a CSV, while multiple ids
+#' are served as a ZIP of one CSV per station; this function handles both and
+#' always returns one combined, long-format table with a `station_id` column.
+#'
+#' @param station_id Character or numeric vector of CWA station ids, e.g.
+#'   `"467490"` or `c("466920", "466930")`.
+#' @param start,end Start and end dates (inclusive). Either `Date`/`POSIXt`
+#'   objects or strings in `YYYYMMDD` / `YYYY-MM-DD` form. Per the data source,
+#'   `end` cannot be later than yesterday; the server truncates it if so.
+#' @param type Observation interval: `"hourly"` (default), `"daily"` or
+#'   `"monthly"`. Daily and monthly responses contain extra summary columns
+#'   (max/min/means).
+#' @param clean Logical. If `TRUE` (default), coerce value columns to numeric
+#'   and replace known CODiS missing-value sentinels with `NA`.
+#' @param na_codes Numeric vector of sentinel values to treat as missing when
+#'   `clean = TRUE`.
+#' @param quiet Logical, passed to the downloader; `FALSE` shows a progress bar.
+#'
+#' @return A data frame with a leading `station_id` column, an `obs_time`
+#'   column (the original first column of the feed), and one column per measured
+#'   variable. Column names keep the provider's original Chinese/English labels.
+#'
+#' @examples
+#' \dontrun{
+#' # One station, hourly
+#' w <- get_weather("467490", "2024-01-01", "2024-01-07")
+#'
+#' # Several stations, daily
+#' wd <- get_weather(c("466920", "466930"), 20240101, 20240131, type = "daily")
+#' }
+#' @export
+get_weather <- function(station_id,
+                        start,
+                        end,
+                        type = c("hourly", "daily", "monthly"),
+                        clean = TRUE,
+                        na_codes = .tww_default_na_codes(),
+                        quiet = TRUE) {
+  type <- match.arg(type)
+  if (length(station_id) == 0L) {
+    stop("`station_id` must contain at least one id.", call. = FALSE)
+  }
+  ids <- trimws(as.character(station_id))
+  ids <- ids[nzchar(ids) & !is.na(ids)]
+  if (length(ids) == 0L) {
+    stop("`station_id` has no usable ids after trimming.", call. = FALSE)
+  }
+
+  start <- .tww_as_yyyymmdd(start, "start")
+  end   <- .tww_as_yyyymmdd(end, "end")
+  if (end < start) {
+    stop("`end` (", end, ") is before `start` (", start, ").", call. = FALSE)
+  }
+
+  url  <- .tww_build_url(ids, start, end, type)
+  path <- .tww_download(url, quiet = quiet)
+  on.exit(unlink(path), add = TRUE)
+
+  if (.tww_is_zip(path)) {
+    out <- .tww_read_zip(path, ids, na_codes, clean)
+  } else {
+    df <- .tww_read_csv(path, na_codes, clean)
+    id <- if (length(ids) == 1L) ids else NA_character_
+    out <- cbind(station_id = id, df, stringsAsFactors = FALSE)
+  }
+
+  attr(out, "type")  <- type
+  attr(out, "start") <- start
+  attr(out, "end")   <- end
+  out
+}
+
+# Read a multi-station ZIP into a single long data frame.
+.tww_read_zip <- function(path, ids, na_codes, clean) {
+  exdir <- tempfile("tww_zip")
+  dir.create(exdir)
+  on.exit(unlink(exdir, recursive = TRUE), add = TRUE)
+
+  files <- utils::unzip(path, exdir = exdir)
+  files <- files[grepl("\\.csv$", files, ignore.case = TRUE)]
+  if (length(files) == 0L) {
+    stop("ZIP response contained no CSV files.", call. = FALSE)
+  }
+
+  parts <- lapply(files, function(f) {
+    df <- .tww_read_csv(f, na_codes, clean)
+    cbind(station_id = .tww_id_from_name(f), df, stringsAsFactors = FALSE)
+  })
+
+  .tww_rbind_fill(parts)
+}
+
+# Bind data frames with possibly differing column sets (union of columns).
+.tww_rbind_fill <- function(parts) {
+  parts <- Filter(function(d) !is.null(d) && nrow(d) > 0L, parts)
+  if (length(parts) == 0L) return(data.frame())
+  all_cols <- Reduce(union, lapply(parts, names))
+  parts <- lapply(parts, function(d) {
+    miss <- setdiff(all_cols, names(d))
+    for (m in miss) d[[m]] <- NA
+    d[all_cols]
+  })
+  do.call(rbind, parts)
+}

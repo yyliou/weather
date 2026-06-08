@@ -1,0 +1,6 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^\.git$
+^\.gitattributes$
+^README\.md$
+^LICENSE\.md$
