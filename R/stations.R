@@ -1,63 +1,115 @@
 #' Download CWA weather station metadata
 #'
-#' Fetches the Central Weather Administration "detailed station info" feed
-#' (`STMap.json`) and returns it as a tidy data frame. This is the companion
-#' lookup table for [get_weather()]: it gives you each station's id, name and
-#' longitude/latitude, which is also what [get_township_weather()] uses to map
-#' stations to townships.
+#' Fetches the CODiS station list that powers the station picker on
+#' <https://codis.cwa.gov.tw/StationData> and returns it as a tidy data frame.
+#' This is the companion lookup table for [get_weather()]: it gives you each
+#' station's id, Chinese name and longitude/latitude, which is also what
+#' [get_township_weather()] uses to map stations to townships.
 #'
-#' @param url Source URL for the station JSON. Defaults to the official CWA
-#'   `STMap.json`.
-#' @param active_only Logical. If `TRUE` (default) and the feed exposes a
-#'   status/active flag, only currently operating stations are returned. If the
-#'   feed has no such flag this argument is ignored.
-#' @param raw Logical. If `TRUE`, return the raw parsed JSON (a data frame with
-#'   the provider's original column names) instead of the normalised table.
+#' The CODiS feed groups stations by attribute (`cwb` 局屬氣象站, `agr`
+#' 農業氣象站, automatic and rainfall stations, ...). This function flattens all
+#' groups into one table and keeps the attribute in an `attribute` column. A
+#' station is treated as currently operating when it has no decommission date
+#' (`stationEndDate`); `active_only = TRUE` keeps only those.
 #'
-#' @return A data frame. With `raw = FALSE` (default) it contains at least the
-#'   columns `station_id`, `name`, `lon`, `lat`, and, when available,
-#'   `altitude`, `county`, `address` and `active`, followed by any remaining
-#'   original columns.
+#' @param url Source URL for the station JSON. Defaults to the CODiS
+#'   `station_list` endpoint. You can pass another compatible feed (e.g. the old
+#'   CWA `STMap.json` via `.tww_stmap_url()`); the normaliser auto-detects the
+#'   common id / name / lon / lat columns either way.
+#' @param active_only Logical. If `TRUE` (default), only currently operating
+#'   stations (those without a decommission date / active flag) are returned.
+#' @param raw Logical. If `TRUE`, return the raw flattened table with the
+#'   provider's original column names (including `log`, `extend.mainPic`, ...)
+#'   instead of the normalised table.
+#'
+#' @return A data frame. With `raw = FALSE` (default) it contains at least
+#'   `station_id`, `name`, `lon`, `lat`, and, when available, `altitude`,
+#'   `county`, `address`, `area`, `attribute`, `start_date`, `end_date`,
+#'   `remark` and `active`.
 #'
 #' @examples
 #' \dontrun{
 #' st <- get_stations()
 #' head(st[, c("station_id", "name", "county", "lon", "lat")])
+#'
+#' # include decommissioned stations too
+#' all_st <- get_stations(active_only = FALSE)
 #' }
 #' @export
 get_stations <- function(url = NULL,
                          active_only = TRUE,
                          raw = FALSE) {
-  if (is.null(url)) url <- .tww_stmap_url()
+  if (is.null(url)) url <- .tww_station_list_url()
 
   dat <- tryCatch(
     jsonlite::fromJSON(url, simplifyDataFrame = TRUE),
     error = function(e) {
-      stop("Could not read station metadata from:\n  ", url,
+      stop("Could not read station list from:\n  ", url,
            "\n  ", conditionMessage(e), call. = FALSE)
     }
   )
 
-  # The feed is sometimes wrapped (e.g. a named list with one data-frame slot).
-  if (is.list(dat) && !is.data.frame(dat)) {
-    is_df <- vapply(dat, is.data.frame, logical(1))
-    if (any(is_df)) {
-      dat <- dat[[which(is_df)[1]]]
-    } else {
-      dat <- as.data.frame(dat, stringsAsFactors = FALSE)
-    }
+  # CODiS wraps the payload in an envelope: list(code, message, metadata, data).
+  # Unwrap to the `data` element when present; otherwise use what we got.
+  payload <- if (is.list(dat) && !is.data.frame(dat) && !is.null(dat[["data"]])) {
+    dat[["data"]]
+  } else {
+    dat
   }
-  if (!is.data.frame(dat) || nrow(dat) == 0L) {
-    stop("Station metadata feed returned no rows.", call. = FALSE)
-  }
-  if (isTRUE(raw)) return(dat)
 
-  .tww_normalise_stations(dat, active_only = active_only)
+  st <- .tww_flatten_station_list(payload)
+
+  if (!is.data.frame(st) || nrow(st) == 0L) {
+    stop("Station list endpoint returned no rows:\n  ", url, call. = FALSE)
+  }
+  if (isTRUE(raw)) return(st)
+
+  .tww_normalise_stations(st, active_only = active_only)
+}
+
+# The CODiS `data` payload is a data frame with one row per station *group*:
+# a scalar `stationAttribute` and an `item` list-column whose elements are the
+# per-group station data frames. Flatten them into a single long table, tagging
+# every row with its attribute. A plain (already-flat) feed is passed through.
+.tww_flatten_station_list <- function(payload) {
+  one_group <- function(df, attr) {
+    if (is.null(df)) return(NULL)
+    if (!is.data.frame(df)) df <- as.data.frame(df, stringsAsFactors = FALSE)
+    if (nrow(df) == 0L) return(NULL)
+    df[["stationAttribute"]] <- if (length(attr)) attr else NA_character_
+    df
+  }
+
+  # Shape A: a data frame with a scalar `stationAttribute` column and an
+  # `item` list-column (jsonlite's usual simplification).
+  if (is.data.frame(payload) && "item" %in% names(payload)) {
+    items <- payload[["item"]]
+    attrs <- if ("stationAttribute" %in% names(payload)) {
+      payload[["stationAttribute"]]
+    } else {
+      rep(NA_character_, length(items))
+    }
+    parts <- lapply(seq_along(items),
+                    function(i) one_group(items[[i]], attrs[[i]]))
+    return(.tww_rbind_fill(parts))
+  }
+
+  # Shape B: a plain list of group objects, each list(stationAttribute, item).
+  if (is.list(payload) && !is.data.frame(payload) &&
+      length(payload) && all(vapply(payload,
+        function(g) is.list(g) && !is.null(g[["item"]]), logical(1)))) {
+    parts <- lapply(payload,
+                    function(g) one_group(g[["item"]], g[["stationAttribute"]]))
+    return(.tww_rbind_fill(parts))
+  }
+
+  # Otherwise assume it is already a flat station table.
+  if (is.data.frame(payload)) return(payload)
+  as.data.frame(payload, stringsAsFactors = FALSE)
 }
 
 # Map the provider's columns onto a stable, documented schema. Column names in
-# CWA feeds have varied over time, so detection is done case-insensitively
-# against a set of candidate names.
+# CWA/CODiS feeds vary, so detection is case-insensitive against candidate sets.
 .tww_normalise_stations <- function(dat, active_only) {
   nm <- names(dat)
   low <- tolower(nm)
@@ -70,14 +122,19 @@ get_stations <- function(url = NULL,
     NA_character_
   }
 
-  col_id   <- pick(c("id", "stationid", "station_id", "stno", "stid", "stationidc"))
-  col_name <- pick(c("name", "stationname", "locationname", "cname", "station_name"))
-  col_lat  <- pick(c("lat", "latitude", "stationlatitude", "y"))
-  col_lon  <- pick(c("lon", "lng", "longitude", "stationlongitude", "x"))
-  col_alt  <- pick(c("alt", "altitude", "height", "elevation", "stationaltitude"))
-  col_cty  <- pick(c("county", "countyname", "city", "area"))
-  col_addr <- pick(c("address", "location", "addr"))
-  col_act  <- pick(c("active", "status", "statusfg", "state"))
+  col_id    <- pick(c("stationid", "id", "station_id", "stno", "stid", "stationidc"))
+  col_name  <- pick(c("stationname", "name", "locationname", "cname", "station_name"))
+  col_lat   <- pick(c("latitude", "lat", "stationlatitude", "y"))
+  col_lon   <- pick(c("longitude", "lon", "lng", "stationlongitude", "x"))
+  col_alt   <- pick(c("altitude", "alt", "height", "elevation", "stationaltitude"))
+  col_cty   <- pick(c("countyname", "county", "countryname", "city"))
+  col_addr  <- pick(c("address", "location", "addr"))
+  col_area  <- pick(c("area"))
+  col_attr  <- pick(c("stationattribute", "attribute", "stationtype", "type"))
+  col_sdate <- pick(c("stationstartdate", "startdate", "start_date", "datastartdate"))
+  col_edate <- pick(c("stationenddate", "enddate", "end_date"))
+  col_act   <- pick(c("active", "status", "statusfg", "state", "switch"))
+  col_rmk   <- pick(c("webremark", "remark", "note"))
 
   if (is.na(col_id) || is.na(col_lat) || is.na(col_lon)) {
     stop("Could not locate id / latitude / longitude columns in the station ",
@@ -86,6 +143,12 @@ get_stations <- function(url = NULL,
   }
 
   num <- function(x) suppressWarnings(as.numeric(x))
+  # blank strings -> NA, so empty stationEndDate becomes a clean missing value
+  chr <- function(x) {
+    x <- as.character(x)
+    x[is.na(x) | !nzchar(trimws(x))] <- NA_character_
+    x
+  }
 
   out <- data.frame(
     station_id = as.character(dat[[col_id]]),
@@ -94,27 +157,36 @@ get_stations <- function(url = NULL,
     lat        = num(dat[[col_lat]]),
     stringsAsFactors = FALSE
   )
-  if (!is.na(col_alt))  out$altitude <- num(dat[[col_alt]])
-  if (!is.na(col_cty))  out$county   <- as.character(dat[[col_cty]])
-  if (!is.na(col_addr)) out$address  <- as.character(dat[[col_addr]])
+  if (!is.na(col_alt))  out$altitude  <- num(dat[[col_alt]])
+  if (!is.na(col_cty))  out$county    <- chr(dat[[col_cty]])
+  if (!is.na(col_addr)) out$address   <- chr(dat[[col_addr]])
+  if (!is.na(col_area)) out$area      <- chr(dat[[col_area]])
+  if (!is.na(col_attr)) out$attribute <- as.character(dat[[col_attr]])
+  if (!is.na(col_sdate)) {
+    out$start_date <- suppressWarnings(as.Date(chr(dat[[col_sdate]])))
+  }
+  end_chr <- NULL
+  if (!is.na(col_edate)) {
+    end_chr <- chr(dat[[col_edate]])
+    out$end_date <- suppressWarnings(as.Date(end_chr))
+  }
+  if (!is.na(col_rmk)) out$remark <- chr(dat[[col_rmk]])
 
+  # Active flag: prefer an explicit status column; otherwise a station is
+  # "active" when it carries no decommission (end) date.
   active <- NULL
   if (!is.na(col_act)) {
     raw_act <- dat[[col_act]]
     active <- if (is.logical(raw_act)) {
       raw_act
     } else {
-      # treat common "on/working/現存/1/true" markers as active
       a <- tolower(as.character(raw_act))
       !(a %in% c("0", "false", "off", "n", "no", "撤站", "已撤銷", "stop"))
     }
-    out$active <- active
+  } else if (!is.null(end_chr)) {
+    active <- is.na(end_chr)
   }
-
-  # append any columns we did not explicitly map, for completeness
-  mapped <- c(col_id, col_name, col_lon, col_lat, col_alt, col_cty, col_addr, col_act)
-  extra  <- setdiff(nm, mapped[!is.na(mapped)])
-  for (e in extra) out[[e]] <- dat[[e]]
+  if (!is.null(active)) out$active <- active
 
   if (isTRUE(active_only) && !is.null(active)) {
     out <- out[!is.na(out$active) & out$active, , drop = FALSE]

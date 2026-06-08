@@ -40,9 +40,14 @@ st <- get_stations()
 head(st[, c("station_id", "name", "county", "lon", "lat")])
 ```
 
-Returns a tidy table with at least `station_id`, `name`, `lon`, `lat`, plus
-`altitude`, `county`, `address`, `active` when the source feed provides them.
-Pass `raw = TRUE` to get the provider's original columns untouched.
+Station metadata comes from the CODiS station list
+(<https://codis.cwa.gov.tw/StationData>). All station types (`cwb` 局屬氣象站,
+`agr` 農業站, automatic and rainfall stations, ...) are flattened into one tidy
+table with at least `station_id`, `name`, `lon`, `lat`, plus `altitude`,
+`county`, `address`, `area`, `attribute`, `start_date`, `end_date` and
+`active`. By default only operating stations are returned; pass
+`active_only = FALSE` to include decommissioned ones, or `raw = TRUE` to get the
+provider's original columns untouched.
 
 ## 2. Measurement data
 
@@ -100,7 +105,8 @@ st  <- assign_township(st, bnd)            # adds township / county_geo columns
 
 ## Notes
 
-- Station metadata comes from CWA `STMap.json`; if that endpoint moves, pass
+- Station metadata comes from the CODiS `station_list` endpoint
+  (<https://codis.cwa.gov.tw/api/station_list>); if that endpoint moves, pass
   your own `url=` to `get_stations()`.
 - Township boundaries are **not** bundled. `load_tw_townships()` reads any
   `sf`-readable source; for production use, download the official layer from

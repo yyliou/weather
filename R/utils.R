@@ -5,7 +5,17 @@
   "https://mycolab.pp.nchu.edu.tw/historical_weather/index.php"
 }
 
-# Default URL for CWA detailed station metadata (STMap.json).
+# Default URL for the CODiS station list. This is the JSON feed that powers the
+# station picker on https://codis.cwa.gov.tw/StationData : a single GET returns
+# every station (局屬站 / 農業站 / 自動站 / 雨量站 ...) grouped by attribute,
+# each with id, Chinese name, lon/lat, altitude, county, set-up / decommission
+# dates, etc.
+.tww_station_list_url <- function() {
+  "https://codis.cwa.gov.tw/api/station_list"
+}
+
+# Previous source (CWA detailed station map, STMap.json). Kept so callers can
+# still opt into it via `get_stations(url = .tww_stmap_url())`.
 .tww_stmap_url <- function() {
   "https://www.cwa.gov.tw/Data/js/Observe/OSM/C/STMap.json"
 }
