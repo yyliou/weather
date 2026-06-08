@@ -7,7 +7,7 @@
 
 # Default URL for CWA detailed station metadata (STMap.json).
 .tww_stmap_url <- function() {
-  "https://www.cwb.gov.tw/Data/js/Observe/OSM/C/STMap.json"
+  "https://www.cwa.gov.tw/Data/js/Observe/OSM/C/STMap.json"
 }
 
 # Normalise a date-ish input into the YYYYMMDD string the API expects.
