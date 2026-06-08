@@ -20,6 +20,55 @@
   "https://www.cwa.gov.tw/Data/js/Observe/OSM/C/STMap.json"
 }
 
+# A browser-like User-Agent. The CODiS / CWA hosts reject requests carrying
+# R's default libcurl agent (HTTP 403 / empty body), which is why reading the
+# station list straight off the URL with `jsonlite::fromJSON(url)` fails. We
+# therefore download with this UA first, then parse from the local file.
+.tww_user_agent <- function() {
+  paste0("Mozilla/5.0 (Windows NT 10.0; Win64; x64) ",
+         "AppleWebKit/537.36 (KHTML, like Gecko) ",
+         "Chrome/124.0.0.0 Safari/537.36")
+}
+
+# Download `url` to a temp file (binary-safe) and return the path. Sets a
+# browser User-Agent and a generous timeout. Tries the libcurl method with an
+# explicit header set first; if that is unavailable it falls back to the
+# default method with the UA supplied via `options(HTTPUserAgent=)`.
+.tww_fetch_to_tempfile <- function(url, fileext = ".json", quiet = TRUE) {
+  tmp     <- tempfile(fileext = fileext)
+  old_to  <- getOption("timeout")
+  old_ua  <- getOption("HTTPUserAgent")
+  on.exit(options(timeout = old_to, HTTPUserAgent = old_ua), add = TRUE)
+  options(timeout = max(old_to, 300), HTTPUserAgent = .tww_user_agent())
+
+  do_dl <- function(extra) {
+    do.call(utils::download.file,
+            c(list(url = url, destfile = tmp, mode = "wb", quiet = quiet),
+              extra))
+  }
+
+  tryCatch(
+    do_dl(list(method  = "libcurl",
+               headers = c("User-Agent" = .tww_user_agent(),
+                           "Accept" = "application/json, text/plain, */*"))),
+    error = function(e1) {
+      # libcurl method or `headers=` not available: retry with defaults.
+      tryCatch(
+        do_dl(list()),
+        error = function(e2) {
+          stop("Request failed for:\n  ", url, "\n  ",
+               conditionMessage(e2), call. = FALSE)
+        }
+      )
+    }
+  )
+
+  if (!file.exists(tmp) || file.size(tmp) == 0L) {
+    stop("Empty response from server for URL:\n  ", url, call. = FALSE)
+  }
+  tmp
+}
+
 # Normalise a date-ish input into the YYYYMMDD string the API expects.
 # Accepts Date, POSIXt, or character/numeric in YYYYMMDD or YYYY-MM-DD form.
 .tww_as_yyyymmdd <- function(x, arg = "date") {

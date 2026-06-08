@@ -23,9 +23,10 @@
 #'   instead of the normalised table.
 #'
 #' @return A data frame. With `raw = FALSE` (default) it contains at least
-#'   `station_id`, `name`, `lon`, `lat`, and, when available, `altitude`,
-#'   `county`, `address`, `area`, `attribute`, `start_date`, `end_date`,
-#'   `remark` and `active`.
+#'   `station_id`, `name`, `lon`, `lat`, and, when available, `name_en`,
+#'   `altitude`, `county`, `town`, `address`, `area`, `attribute`,
+#'   `start_date`, `end_date`, `remark` and `active`. Provider noise columns
+#'   (e.g. `log`, `extend.mainPic`) are dropped unless `raw = TRUE`.
 #'
 #' @examples
 #' \dontrun{
@@ -41,13 +42,34 @@ get_stations <- function(url = NULL,
                          raw = FALSE) {
   if (is.null(url)) url <- .tww_station_list_url()
 
+  # Remote URLs are downloaded with a browser User-Agent first (the CODiS host
+  # rejects R's default agent); local paths are parsed directly. Either way we
+  # hand `jsonlite` a file, never the raw URL.
+  src <- if (grepl("^https?://", url)) {
+    path <- .tww_fetch_to_tempfile(url, fileext = ".json")
+    on.exit(unlink(path), add = TRUE)
+    path
+  } else {
+    url
+  }
+
   dat <- tryCatch(
-    jsonlite::fromJSON(url, simplifyDataFrame = TRUE),
+    jsonlite::fromJSON(src, simplifyVector = TRUE,
+                       simplifyDataFrame = TRUE, flatten = FALSE),
     error = function(e) {
-      stop("Could not read station list from:\n  ", url,
+      stop("Could not parse station list JSON from:\n  ", url,
            "\n  ", conditionMessage(e), call. = FALSE)
     }
   )
+
+  # Surface an explicit API error envelope (code != 200) instead of failing
+  # later with a confusing "no id/lat/lon columns" message.
+  if (is.list(dat) && !is.data.frame(dat) &&
+      !is.null(dat[["code"]]) && !identical(as.integer(dat[["code"]][1]), 200L)) {
+    stop("Station list endpoint returned an error (code ", dat[["code"]][1],
+         if (!is.null(dat[["message"]])) paste0(": ", dat[["message"]][1]),
+         ")\n  ", url, call. = FALSE)
+  }
 
   # CODiS wraps the payload in an envelope: list(code, message, metadata, data).
   # Unwrap to the `data` element when present; otherwise use what we got.
@@ -124,10 +146,12 @@ get_stations <- function(url = NULL,
 
   col_id    <- pick(c("stationid", "id", "station_id", "stno", "stid", "stationidc"))
   col_name  <- pick(c("stationname", "name", "locationname", "cname", "station_name"))
+  col_nmeng <- pick(c("stationnameen", "name_en", "ename", "englishname"))
   col_lat   <- pick(c("latitude", "lat", "stationlatitude", "y"))
   col_lon   <- pick(c("longitude", "lon", "lng", "stationlongitude", "x"))
   col_alt   <- pick(c("altitude", "alt", "height", "elevation", "stationaltitude"))
   col_cty   <- pick(c("countyname", "county", "countryname", "city"))
+  col_town  <- pick(c("townname", "town", "township", "districtname"))
   col_addr  <- pick(c("address", "location", "addr"))
   col_area  <- pick(c("area"))
   col_attr  <- pick(c("stationattribute", "attribute", "stationtype", "type"))
@@ -157,8 +181,10 @@ get_stations <- function(url = NULL,
     lat        = num(dat[[col_lat]]),
     stringsAsFactors = FALSE
   )
+  if (!is.na(col_nmeng)) out$name_en  <- chr(dat[[col_nmeng]])
   if (!is.na(col_alt))  out$altitude  <- num(dat[[col_alt]])
   if (!is.na(col_cty))  out$county    <- chr(dat[[col_cty]])
+  if (!is.na(col_town)) out$town      <- chr(dat[[col_town]])
   if (!is.na(col_addr)) out$address   <- chr(dat[[col_addr]])
   if (!is.na(col_area)) out$area      <- chr(dat[[col_area]])
   if (!is.na(col_attr)) out$attribute <- as.character(dat[[col_attr]])

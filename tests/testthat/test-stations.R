@@ -21,6 +21,10 @@ make_payload <- function() {
       stationStartDate = c("1896-01-01", "1972-03-01"),
       stationEndDate   = c("", "2022-12-31"),    # 466880 decommissioned
       webRemark        = c("", ""),
+      # provider noise columns present in the live feed
+      `extend.mainPic` = c("", ""),
+      log              = c("jwt1", "jwt2"),
+      check.names      = FALSE,
       stringsAsFactors = FALSE
     ),
     data.frame(
@@ -35,7 +39,10 @@ make_payload <- function() {
       stationStartDate = "1985-02-01",
       stationEndDate   = "",
       webRemark        = "",
+      `extend.mainPic` = "",
+      log              = "jwt3",
       flow             = "z",                    # extra column unique to group
+      check.names      = FALSE,
       stringsAsFactors = FALSE
     )
   )
@@ -71,4 +78,22 @@ test_that("active_only drops decommissioned stations", {
   flat <- .tww_flatten_station_list(make_payload())
   active <- .tww_normalise_stations(flat, active_only = TRUE)
   expect_setequal(active$station_id, c("466920", "72C440"))
+})
+
+test_that("normalise drops provider noise columns", {
+  flat <- .tww_flatten_station_list(make_payload())
+  out  <- .tww_normalise_stations(flat, active_only = FALSE)
+  expect_false(any(c("log", "extend.mainPic") %in% names(out)))
+})
+
+# Live smoke test: only runs with a network connection. Confirms the real
+# CODiS endpoint is reachable with the browser User-Agent and parses cleanly.
+test_that("get_stations() hits the live CODiS endpoint", {
+  testthat::skip_on_cran()
+  testthat::skip_if_offline("codis.cwa.gov.tw")
+  st <- get_stations()
+  expect_s3_class(st, "data.frame")
+  expect_gt(nrow(st), 100L)
+  expect_true(all(c("station_id", "name", "lon", "lat") %in% names(st)))
+  expect_true("466920" %in% st$station_id)   # 臺北 is currently operating
 })
