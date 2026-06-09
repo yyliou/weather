@@ -11,8 +11,8 @@ The package gives you these functions:
 | `get_stations()` | 測站基本資料 — station metadata (id, name, lon/lat, county) |
 | `station_panel()` / `plot_station_panel()` | 營運狀態面板 — panelview-style station operating-status panel (Not yet established / Operating / Decommissioned) over a time window |
 | `get_weather()` | 測量資料 — station observation time series (hourly / daily / monthly) |
-| `get_township_weather()` | 加總到鄉鎮 — aggregate stations up to township level by coordinates (keyed on townid) |
-| `get_region_weather()` | 加總到自訂區域 — aggregate stations over your own shapefile, keyed by one id column |
+| `get_township_weather()` | 內插到鄉鎮 — interpolate weather to township level by inverse-distance weighting (keyed on townid) |
+| `get_region_weather()` | 內插到自訂區域 — interpolate weather over your own shapefile, keyed by one id column |
 
 ## Install
 
@@ -117,12 +117,21 @@ wd <- get_weather(c("466920", "466930"), "2024-01-01", "2024-01-31", type = "dai
   missing-value sentinels (e.g. `-99.8`, `-9999`, and literal text like `"NA"` /
   `"--"`) become `NA`.
 
-## 4. Township aggregation
+## 4. Township interpolation
 
-Each station is reverse-geocoded — its longitude/latitude is matched to the
-township polygon that contains it — then stations in the same township are
-aggregated for every time step. **Rainfall is summed; everything else is
-averaged.**
+Every station is downloaded **once**, then each township's value is estimated by
+spatially interpolating the surrounding stations. For each township, time step
+and variable the value is the **inverse-distance-weighted (IDW)** mean of the
+`k_nearest` stations that report that variable:
+
+```
+v = Σ wᵢ·xᵢ / Σ wᵢ ,   wᵢ = 1 / dᵢ^power
+```
+
+where `dᵢ` is the great-circle distance from the township's representative point
+to station *i*. **Every variable — rainfall included — is interpolated this
+way** (the result estimates local conditions at the township, it is not a sum
+over its stations).
 
 ```r
 # township boundaries as an sf layer. The default downloads the official NLSC
@@ -130,7 +139,7 @@ averaged.**
 # shapefiles are unpacked automatically. Pass any sf-readable source to override.
 bnd <- load_tw_townships()                 # or load_tw_townships("twtowns.shp")
 
-# every township that has a station:
+# every township:
 tw_all <- get_township_weather(
   start = "2024-01-01", end = "2024-01-07", type = "daily", boundaries = bnd
 )
@@ -140,7 +149,9 @@ tw <- get_township_weather(
   start = "2024-01-01", end = "2024-01-07", type = "daily",
   boundaries = bnd,
   townid     = c("66000040", "66000050"),   # omit to do every township
-  k_nearest  = 10                            # nearest non-NA stations for fallback
+  power      = 2,                            # IDW distance exponent
+  k_nearest  = 8,                            # nearest stations blended per cell
+  max_dist   = NULL                          # optional cap in km
 )
 ```
 
@@ -151,23 +162,21 @@ both 臺北市 and 基隆市). The boundary layer must therefore include a towns
 column; `load_tw_townships()` keeps it for you.
 
 Each requested township gets one row per time step (a **balanced, gap-free
-panel**). When a township has **no valid value** for a given time step /
-variable — no station inside its polygon, or every in-township station is `NA`
-there — that cell is filled by walking outward from the township centroid and
-averaging the `k_nearest` (default 10) closest stations that **actually report a
-value** there, skipping any that are `NA`. `pool_size` controls how many nearby
-stations are downloaded to search (default `max(30, 3 * k_nearest)`).
+panel**). Because the value is drawn from the nearest stations that actually
+have data — skipping any that are `NA` at that step — a cell is empty only when
+*no* station reports the variable at that time, even for districts with no
+station of their own. `max_dist` (kilometres) optionally caps how far a
+contributing station may be.
 
 Output columns: `townid`, `county`, `township`, `obs_time`, one column per
-aggregated variable, `n_stations` (in-township stations feeding the row) and
-`used_fallback` (`TRUE` when any cell came from the nearest-station pool). The
-contributing in-township station ids are stored in `attr(tw, "stations")`.
+interpolated variable, and `n_stations` (nearby stations reporting at that time
+step). The IDW power is stored in `attr(tw, "power")` and the source station ids
+in `attr(tw, "stations")`.
 
-Override the rule per column with `agg_fun`, e.g. sum sunshine hours too:
-
-```r
-get_township_weather(..., agg_fun = list("日照時數(hour)" = sum))
-```
+> **monthly note** — for `type = "monthly"` the end date is automatically
+> extended to the end of its month, because the source returns a month's record
+> only once the window reaches the month end (a sub-month window comes back
+> empty — which previously surfaced as all-`NA`).
 
 You can also use the building blocks directly:
 
@@ -176,15 +185,14 @@ st  <- get_stations()
 st  <- assign_township(st, bnd)            # adds township / county_geo / townid
 ```
 
-## 5. Aggregation over your own shapefile
+## 5. Interpolation over your own shapefile
 
 `get_region_weather()` is the general-purpose sibling of
 `get_township_weather()`: instead of the official township layer, you supply
 **your own** polygons (an `sf` object, or a path/URL to a shapefile / GeoPackage
 / GeoJSON / zipped shapefile) and name the column that identifies each region.
-Everything else — point-in-polygon assignment, rain-summed/else-averaged
-aggregation, and the same balanced-panel nearest non-NA fallback — works exactly
-as above.
+The same IDW interpolation (rainfall included) is applied to each region's
+representative point.
 
 ```r
 rw <- get_region_weather(
@@ -192,13 +200,13 @@ rw <- get_region_weather(
   shp      = "my_regions.shp",   # or an sf object you already loaded
   id_field = "site_name",        # the column that names each region
   regions  = NULL,               # optional subset of id_field values to keep
-  k_nearest = 10
+  power = 2, k_nearest = 8, max_dist = NULL
 )
 ```
 
 Output columns: `region` (your `id_field` values), `obs_time`, one column per
-aggregated variable, `n_stations` and `used_fallback`. Polygons that share an
-`id_field` value are unioned and treated as a single region.
+interpolated variable, and `n_stations`. Polygons that share an `id_field` value
+are unioned and treated as a single region.
 
 ## Notes
 

@@ -69,6 +69,31 @@
   tmp
 }
 
+# Great-circle (haversine) distance in kilometres between one origin point
+# (`lon0`, `lat0`) and vectors of station longitudes/latitudes. Used by the IDW
+# interpolation so it does not depend on `sf` for distances.
+.tww_haversine_km <- function(lon0, lat0, lon, lat) {
+  R  <- 6371.0088
+  to <- pi / 180
+  dlat <- (lat - lat0) * to
+  dlon <- (lon - lon0) * to
+  a <- sin(dlat / 2)^2 +
+    cos(lat0 * to) * cos(lat * to) * sin(dlon / 2)^2
+  2 * R * asin(pmin(1, sqrt(a)))
+}
+
+# Last calendar day (YYYYMMDD) of the month that `yyyymmdd` falls in. The CWB
+# monthly endpoint only returns a month's record once the request window reaches
+# the end of that month, so get_weather() extends `end` to it (a 7-day January
+# window such as 20240101-20240107 otherwise comes back completely empty).
+.tww_month_end <- function(yyyymmdd) {
+  d <- as.Date(yyyymmdd, format = "%Y%m%d")
+  lt <- as.POSIXlt(d)
+  lt$mday <- 1L
+  lt$mon  <- lt$mon + 1L
+  format(as.Date(lt) - 1, "%Y%m%d")
+}
+
 # Normalise a date-ish input into the YYYYMMDD string the API expects.
 # Accepts Date, POSIXt, or character/numeric in YYYYMMDD or YYYY-MM-DD form.
 .tww_as_yyyymmdd <- function(x, arg = "date") {

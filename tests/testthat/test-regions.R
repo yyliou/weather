@@ -1,6 +1,5 @@
-# Tests for the townid-keyed aggregation and the nearest-station fallback.
-# These exercise the pure helpers and only touch `sf` for the centroid-based
-# pool, so they run without any network access.
+# Tests for boundary standardisation, station assignment and region points.
+# These touch `sf` only for geometry and run without any network access.
 
 test_that("standardise_boundaries keeps a townid column when present", {
   testthat::skip_if_not_installed("sf")
@@ -14,74 +13,6 @@ test_that("standardise_boundaries keeps a townid column when present", {
   std <- .tww_standardise_boundaries(shp, NULL, NULL)
   expect_true(all(c("township", "county", "townid") %in% names(std)))
   expect_equal(std$townid, "66000040")
-})
-
-test_that("aggregation falls back to nearest stations per cell", {
-  regions <- data.frame(
-    county   = c("臺中市", "臺中市"),
-    township = c("北屯區", "西屯區"),
-    stringsAsFactors = FALSE
-  )
-  regions$in_ids   <- list(c("A"), character(0))   # 西屯 has no station of its own
-  regions$near_ids <- list(c("A", "B"), c("A", "B"))
-
-  obs <- data.frame(
-    station_id = c("A", "B", "A", "B"),
-    obs_time   = c("d1", "d1", "d2", "d2"),
-    `氣溫(℃)`    = c(18, 22, NA, 20),    # A's temp missing on d2
-    `降水量(mm)` = c(1, 5, 0, 4),
-    check.names = FALSE, stringsAsFactors = FALSE
-  )
-
-  out <- .tww_aggregate_regions(obs, regions, "降水|雨量|precip|rain", list())
-
-  # one row per region per day -> the "should be 7 each" case, here 2 x 2 = 4
-  expect_equal(nrow(out), 4L)
-
-  bt1 <- out[out$township == "北屯區" & out$obs_time == "d1", ]
-  expect_equal(bt1[["氣溫(℃)"]], 18)        # A only, in-township
-  expect_false(bt1$used_fallback)
-
-  bt2 <- out[out$township == "北屯區" & out$obs_time == "d2", ]
-  expect_equal(bt2[["氣溫(℃)"]], 20)        # A is NA -> nearest pool (B = 20)
-  expect_true(bt2$used_fallback)
-  expect_equal(bt2[["降水量(mm)"]], 0)      # rain present in-township, no fallback
-
-  xt1 <- out[out$township == "西屯區" & out$obs_time == "d1", ]
-  expect_equal(xt1[["氣溫(℃)"]], 20)        # mean(18, 22) from nearest pool
-  expect_equal(xt1[["降水量(mm)"]], 6)      # sum(1, 5)
-  expect_equal(xt1$n_stations, 0L)
-  expect_true(xt1$used_fallback)
-})
-
-test_that("nearest pool is keyed on the township centroid (by townid)", {
-  testthat::skip_if_not_installed("sf")
-
-  # two unit-square townships side by side: A sits in the left, B in the right
-  sq <- function(x0) sf::st_polygon(list(rbind(
-    c(x0, 0), c(x0 + 1, 0), c(x0 + 1, 1), c(x0, 1), c(x0, 0))))
-  bnd <- sf::st_sf(
-    county   = c("臺中市", "臺中市"),
-    township = c("左區", "右區"),
-    townid   = c("L01", "R01"),
-    geometry = sf::st_sfc(sq(0), sq(2), crs = 4326)
-  )
-  stations <- data.frame(
-    station_id = c("A", "B"),
-    name       = c("a", "b"),
-    lon        = c(0.5, 2.5), lat = c(0.5, 0.5),
-    townid     = c("L01", "R01"),
-    stringsAsFactors = FALSE
-  )
-  regions <- data.frame(townid = c("L01", "R01"), stringsAsFactors = FALSE)
-  regions <- .tww_attach_region_pools(regions, bnd, stations, pool_size = 1,
-                                      key = "townid")
-
-  left  <- which(regions$townid == "L01")
-  right <- which(regions$townid == "R01")
-  expect_equal(regions$near_ids[[left]],  "A")   # nearest to left centroid
-  expect_equal(regions$near_ids[[right]], "B")   # nearest to right centroid
-  expect_equal(regions$in_ids[[left]],  "A")
 })
 
 test_that("assign_township carries through the townid code", {
@@ -106,44 +37,26 @@ test_that("assign_township carries through the townid code", {
   expect_equal(out$township, c("左區", "右區"))
 })
 
-test_that("fallback walks past NA stations to find non-NA values", {
-  # A region with no station of its own; the two nearest stations are NA and
-  # only the third-nearest reports a value. The walk must skip the NAs.
-  regions <- data.frame(region = "R", stringsAsFactors = FALSE)
-  regions$in_ids   <- list(character(0))
-  regions$near_ids <- list(c("A", "B", "C"))     # distance order
-
-  obs <- data.frame(
-    station_id = c("A", "B", "C"),
-    obs_time   = c("d1", "d1", "d1"),
-    temp       = c(NA, NA, 25),                   # only the farthest has a value
-    check.names = FALSE, stringsAsFactors = FALSE
-  )
-  out <- .tww_aggregate_regions(obs, regions, "rain", list(), k = 10)
-  expect_equal(out$region, "R")
-  expect_equal(out$temp, 25)
-  expect_true(out$used_fallback)
-})
-
-test_that("k_nearest limits how many fallback stations are averaged", {
-  regions <- data.frame(region = "R", stringsAsFactors = FALSE)
-  regions$in_ids   <- list(character(0))
-  regions$near_ids <- list(c("A", "B", "C"))
-  obs <- data.frame(
-    station_id = c("A", "B", "C"),
-    obs_time   = "d1",
-    temp       = c(10, 20, 30),
-    check.names = FALSE, stringsAsFactors = FALSE
-  )
-  k2 <- .tww_aggregate_regions(obs, regions, "rain", list(), k = 2)
-  expect_equal(k2$temp, 15)      # mean(10, 20): only the two nearest
-  k_all <- .tww_aggregate_regions(obs, regions, "rain", list(), k = 10)
-  expect_equal(k_all$temp, 20)   # mean(10, 20, 30)
-})
-
-test_that("get_region_weather helpers standardise, assign and pool", {
+test_that("region_points returns one interior point per key", {
   testthat::skip_if_not_installed("sf")
+  sq <- function(x0) sf::st_polygon(list(rbind(
+    c(x0, 0), c(x0 + 1, 0), c(x0 + 1, 1), c(x0, 1), c(x0, 0))))
+  bnd <- sf::st_sf(
+    township = c("左區", "右區"),
+    county   = c("臺中市", "臺中市"),
+    townid   = c("L01", "R01"),
+    geometry = sf::st_sfc(sq(0), sq(2), crs = 4326)
+  )
+  pts <- .tww_region_points(bnd, key = "townid")
+  expect_setequal(pts$townid, c("L01", "R01"))
+  left  <- pts[pts$townid == "L01", ]
+  right <- pts[pts$townid == "R01", ]
+  expect_true(left$lon  > 0 && left$lon  < 1)    # inside the left square
+  expect_true(right$lon > 2 && right$lon < 3)    # inside the right square
+})
 
+test_that("get_region_weather helpers standardise and assign", {
+  testthat::skip_if_not_installed("sf")
   sq <- function(x0) sf::st_polygon(list(rbind(
     c(x0, 0), c(x0 + 1, 0), c(x0 + 1, 1), c(x0, 1), c(x0, 0))))
   shp <- sf::st_sf(
@@ -162,11 +75,6 @@ test_that("get_region_weather helpers standardise, assign and pool", {
   )
   st2 <- .tww_assign_region(stations, bnd)
   expect_equal(st2$region, c("left", "right"))
-
-  reg <- data.frame(region = c("left", "right"), stringsAsFactors = FALSE)
-  reg <- .tww_attach_region_pools(reg, bnd, st2, pool_size = 1)
-  expect_equal(reg$in_ids[[which(reg$region == "left")]],  "A")
-  expect_equal(reg$near_ids[[which(reg$region == "right")]], "B")
 })
 
 test_that(".tww_standardise_region errors on a missing id_field", {

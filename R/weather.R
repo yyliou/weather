@@ -15,7 +15,9 @@
 #'   `end` cannot be later than yesterday; the server truncates it if so.
 #' @param type Observation interval: `"hourly"` (default), `"daily"` or
 #'   `"monthly"`. Daily and monthly responses contain extra summary columns
-#'   (max/min/means).
+#'   (max/min/means). For `"monthly"`, `end` is automatically extended to the
+#'   last day of its month, because the source returns a month's record only
+#'   once the window reaches the month end (a sub-month window comes back empty).
 #' @param clean Logical. If `TRUE` (default), coerce value columns to numeric
 #'   and replace known CODiS missing-value sentinels with `NA`.
 #' @param na_codes Numeric vector of sentinel values to treat as missing when
@@ -63,6 +65,20 @@ get_weather <- function(station_id,
   end   <- .tww_as_yyyymmdd(end, "end")
   if (end < start) {
     stop("`end` (", end, ") is before `start` (", start, ").", call. = FALSE)
+  }
+
+  # The monthly endpoint only emits a month's record once the window reaches the
+  # end of that month: a short window like 20240101-20240107 returns an empty
+  # body, which silently propagates as all-NA. Extend `end` to its month end.
+  if (type == "monthly") {
+    me <- .tww_month_end(end)
+    if (me > end) {
+      if (!isTRUE(quiet)) {
+        message("monthly: extended end date ", end, " -> ", me,
+                " so the month's record is returned.")
+      }
+      end <- me
+    }
   }
 
   # The endpoint carries the station ids in the query string, so a request for

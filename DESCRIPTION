@@ -8,9 +8,9 @@ Description: A thin wrapper around the NCHU "CWB Historical Weather Data
     redistributes Central Weather Administration (CWA / CODiS) station
     observations. Provides three things: station metadata, station
     measurement time series (hourly / daily / monthly), and an
-    aggregation of station data up to the township (鄉鎮) level by
-    reverse-geocoding each station's longitude/latitude into township
-    polygons (rainfall summed, other variables averaged). Also builds a
+    interpolation of station data up to the township (鄉鎮) level by
+    inverse-distance weighting of the nearest stations to each township
+    (every variable, rainfall included). Also builds a
     'panelview'-style station operating-status panel (not yet set up /
     operating / decommissioned) over a chosen time window.
 License: MIT + file LICENSE
