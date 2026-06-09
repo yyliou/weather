@@ -142,14 +142,35 @@
     fileEncoding = "UTF-8-BOM",
     na.strings = c("", "NA")
   )
-  # The first column is the observation time; rename it to `obs_time`.
+  # The first column is the observation time; rename it to `obs_time` and put it
+  # in a consistent ISO (YYYY-MM-DD / YYYY-MM) shape.
   if (ncol(df) >= 1L) {
     names(df)[1] <- "obs_time"
+    df$obs_time <- .tww_iso_obs_time(df$obs_time)
   }
   if (isTRUE(clean)) {
     df <- .tww_clean(df, na_codes)
   }
   df
+}
+
+# Normalise observation-time strings to ISO. A bare YYYYMMDD becomes
+# YYYY-MM-DD and a bare YYYYMM becomes YYYY-MM; values that already carry
+# separators (e.g. "2024-01-01 01:00:00") are left untouched. This keeps the
+# date format consistent across get_weather(), get_township_weather() and
+# get_region_weather().
+.tww_iso_obs_time <- function(x) {
+  if (!is.character(x)) x <- as.character(x)
+  s <- trimws(x)
+  d8 <- grepl("^[0-9]{8}$", s)
+  if (any(d8)) {
+    x[d8] <- format(as.Date(s[d8], format = "%Y%m%d"), "%Y-%m-%d")
+  }
+  d6 <- grepl("^[0-9]{6}$", s)
+  if (any(d6)) {
+    x[d6] <- paste0(substr(s[d6], 1L, 4L), "-", substr(s[d6], 5L, 6L))
+  }
+  x
 }
 
 # Convert known CODiS missing-value sentinels to NA in numeric-looking columns.

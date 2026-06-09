@@ -11,7 +11,8 @@ The package gives you these functions:
 | `get_stations()` | 測站基本資料 — station metadata (id, name, lon/lat, county) |
 | `get_weather()` | 測量資料 — station observation time series (hourly / daily / monthly) |
 | `get_township_weather()` | 加總到鄉鎮 — aggregate stations up to township level by coordinates |
-| `station_panel()` / `plot_station_panel()` | 營運狀態面板 — panelview-style station operating-status panel (未設站 / 營運中 / 撤銷) over a time window |
+| `get_region_weather()` | 加總到自訂區域 — aggregate stations over your own shapefile, keyed by one id column |
+| `station_panel()` / `plot_station_panel()` | 營運狀態面板 — panelview-style station operating-status panel (Not yet established / Operating / Decommissioned) over a time window |
 
 ## Install
 
@@ -57,7 +58,7 @@ provider's original columns untouched.
 w <- get_weather("467490", "2024-01-01", "2024-01-07")
 
 # several stations, daily (server returns a ZIP; combined automatically)
-wd <- get_weather(c("466920", "466930"), 20240101, 20240131, type = "daily")
+wd <- get_weather(c("466920", "466930"), "2024-01-01", "2024-01-31", type = "daily")
 ```
 
 - `start` / `end` accept `Date` objects or `YYYYMMDD` / `YYYY-MM-DD` strings.
@@ -65,7 +66,8 @@ wd <- get_weather(c("466920", "466930"), 20240101, 20240131, type = "daily")
 - `type` is `"hourly"` (default), `"daily"` or `"monthly"`. Daily/monthly carry
   extra max/min/mean columns.
 - A leading `station_id` column is always added; the original first column
-  (observation time) is renamed `obs_time`.
+  (observation time) is renamed `obs_time` and normalised to ISO format
+  (`YYYY-MM-DD`, or `YYYY-MM` for monthly).
 - With `clean = TRUE` (default), value columns are coerced to numeric and CODiS
   missing-value sentinels (e.g. `-99.8`, `-9999`) become `NA`.
 
@@ -87,7 +89,7 @@ tw <- get_township_weather(
   boundaries = bnd,
   county     = "臺中市",                    # districts are county + township
   townships  = c("北屯區", "西屯區"),       # omit to do every township
-  k_nearest  = 3                            # nearest stations for the fallback
+  k_nearest  = 10                           # nearest non-NA stations for fallback
 )
 ```
 
@@ -95,10 +97,13 @@ Townships are keyed on **county + township** because district names repeat
 across Taiwan (中山區 is in both 臺北市 and 基隆市). `台`/`臺` are treated as
 equal, so `county = "台中市"` works too.
 
-Each requested district gets one row per time step. When a district has **no
-valid value** for a given time step / variable — no station inside its polygon,
-or every in-township station is `NA` — that cell is filled from the `k_nearest`
-stations closest to the district centroid.
+Each requested district gets one row per time step (a **balanced, gap-free
+panel**). When a district has **no valid value** for a given time step /
+variable — no station inside its polygon, or every in-township station is `NA`
+there — that cell is filled by walking outward from the district centroid and
+averaging the `k_nearest` (default 10) closest stations that **actually report a
+value** there, skipping any that are `NA`. `pool_size` controls how many nearby
+stations are downloaded to search (default `max(30, 3 * k_nearest)`).
 
 Output columns: `county`, `township`, `obs_time`, one column per aggregated
 variable, `n_stations` (in-township stations feeding the row) and
@@ -118,13 +123,38 @@ st  <- get_stations()
 st  <- assign_township(st, bnd)            # adds township / county_geo columns
 ```
 
-## 4. Station operating-status panel
+## 4. Aggregation over your own shapefile
+
+`get_region_weather()` is the general-purpose sibling of
+`get_township_weather()`: instead of the official township layer, you supply
+**your own** polygons (an `sf` object, or a path/URL to a shapefile / GeoPackage
+/ GeoJSON / zipped shapefile) and name the column that identifies each region.
+Everything else — point-in-polygon assignment, rain-summed/else-averaged
+aggregation, and the same balanced-panel nearest non-NA fallback — works exactly
+as above.
+
+```r
+rw <- get_region_weather(
+  start = "2024-01-01", end = "2024-01-07", type = "daily",
+  shp      = "my_regions.shp",   # or an sf object you already loaded
+  id_field = "site_name",        # the column that names each region
+  regions  = NULL,               # optional subset of id_field values to keep
+  k_nearest = 10
+)
+```
+
+Output columns: `region` (your `id_field` values), `obs_time`, one column per
+aggregated variable, `n_stations` and `used_fallback`. Polygons that share an
+`id_field` value are unioned and treated as a single region.
+
+## 5. Station operating-status panel
 
 A [panelview](https://yiqingxu.org/packages/panelView/)-style view of which
 stations were operating over a window. Each station's `start_date` (set-up) and
 `end_date` (decommission) classify every time step into one of three states —
-`未設站` (not yet set up), `營運中` (operating) or `撤銷` (decommissioned) —
-so you can see, at a glance, when stations came online and when they were retired.
+`Not yet established`, `Operating` or `Decommissioned` — so you can see, at a
+glance, when stations came online and when they were retired. The labels are in
+English so the plot carries no Chinese text.
 
 ```r
 # build the long status table: one row per station per period
@@ -140,13 +170,13 @@ plot_station_panel(start = "1990-01-01", end = "2024-12-31", by = "year")
   columns. `start` / `end` accept `Date` objects or `YYYYMMDD` / `YYYY-MM-DD`
   strings.
 - By default the metadata is fetched with `active_only = FALSE`, so
-  decommissioned stations are kept (otherwise `撤銷` could never show up). Pass
-  your own metadata to restrict the panel:
+  decommissioned stations are kept (otherwise `Decommissioned` could never show
+  up). Pass your own metadata to restrict the panel:
 
 ```r
 st  <- get_stations(active_only = FALSE)
 tp  <- st[st$county == "臺北市", ]
-plot_station_panel(tp, start = 20000101, end = 20241231, by = "month")
+plot_station_panel(tp, start = "2000-01-01", end = "2024-12-31", by = "month")
 ```
 
 - `plot_station_panel()` returns a normal `ggplot`, so you can keep styling it.
@@ -157,7 +187,7 @@ plot_station_panel(tp, start = 20000101, end = 20241231, by = "month")
 
 A station with a missing set-up date is treated as "set up before the window"
 and a missing decommission date as "still operating", so stations with unknown
-dates default to `營運中` rather than dropping out of the plot.
+dates default to `Operating` rather than dropping out of the plot.
 
 ## Notes
 

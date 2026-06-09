@@ -12,11 +12,11 @@
 #' counts as operating if the station's operating interval touches it at all:
 #'
 #' \itemize{
-#'   \item `"未設站"` (not yet set up) --- the whole period falls
+#'   \item `"Not yet established"` --- the whole period falls
 #'     before `start_date`.
-#'   \item `"營運中"` (operating) --- the period overlaps
+#'   \item `"Operating"` --- the period overlaps
 #'     `[start_date, end_date]` (an open `end_date` means "still operating").
-#'   \item `"撤銷"` (decommissioned) --- the whole period falls after
+#'   \item `"Decommissioned"` --- the whole period falls after
 #'     `end_date`.
 #' }
 #'
@@ -34,13 +34,13 @@
 #'   `"day"`.
 #' @param active_only Logical. Only used when `stations = NULL`; passed to
 #'   [get_stations()]. Defaults to `FALSE` so decommissioned stations are kept
-#'   (otherwise the `"撤銷"` state can never appear).
+#'   (otherwise the `"Decommissioned"` state can never appear).
 #'
 #' @return A data frame with one row per station-by-period and columns
 #'   `station_id`, `name` (if available), `county` (if available), `time` (a
 #'   `Date` marking the start of the period), `period` (a label such as
-#'   `"2020"` or `"2020-03"`) and `status` (an ordered factor with levels
-#'   `"未設站"`, `"營運中"`, `"撤銷"`). The
+#'   `"2020"` or `"2020-03"`) and `status` (a factor with levels
+#'   `"Not yet established"`, `"Operating"`, `"Decommissioned"`). The
 #'   set-up / decommission dates are carried in `attr(x, "start_date")` and
 #'   `attr(x, "end_date")` (named by `station_id`) for sorting downstream.
 #'
@@ -55,7 +55,7 @@
 #' # A handful of stations, monthly, reusing already-fetched metadata
 #' st <- get_stations(active_only = FALSE)
 #' p2 <- station_panel(st[st$county == "臺北市", ],
-#'                     start = 20200101, end = 20241231, by = "month")
+#'                     start = "2020-01-01", end = "2024-12-31", by = "month")
 #' }
 #' @export
 station_panel <- function(stations = NULL,
@@ -106,9 +106,9 @@ station_panel <- function(stations = NULL,
   ps_c  <- periods$p_start[idx_p]
   pe_c  <- periods$p_end[idx_p]
 
-  status <- rep(.tww_status_levels()[2], length(idx_s))   # "營運中"
-  status[!is.na(dec_c) & ps_c > dec_c] <- .tww_status_levels()[3]  # "撤銷"
-  status[!is.na(est_c) & pe_c < est_c] <- .tww_status_levels()[1]  # "未設站"
+  status <- rep(.tww_status_levels()[2], length(idx_s))   # "Operating"
+  status[!is.na(dec_c) & ps_c > dec_c] <- .tww_status_levels()[3]  # "Decommissioned"
+  status[!is.na(est_c) & pe_c < est_c] <- .tww_status_levels()[1]  # "Not yet established"
 
   out <- data.frame(
     station_id = as.character(stations$station_id)[idx_s],
@@ -172,7 +172,7 @@ station_panel <- function(stations = NULL,
 #' plot_station_panel(start = "1990-01-01", end = "2024-12-31", by = "year")
 #'
 #' # Reuse a prebuilt panel and restyle
-#' p <- station_panel(start = 20000101, end = 20241231, by = "year")
+#' p <- station_panel(start = "2000-01-01", end = "2024-12-31", by = "year")
 #' library(ggplot2)
 #' plot_station_panel(p, sort = "id") + theme(legend.position = "top")
 #' }
@@ -186,9 +186,9 @@ plot_station_panel <- function(x = NULL,
                                labels = NA,
                                max_labels = 60L,
                                label_col = c("station_id", "name"),
-                               title = "測站營運狀態",
+                               title = "Station operating status",
                                xlab = NULL,
-                               ylab = "測站") {
+                               ylab = "Station") {
   if (!requireNamespace("ggplot2", quietly = TRUE)) {
     stop("plot_station_panel() needs the 'ggplot2' package. ",
          "Install it with install.packages(\"ggplot2\"), or build the data ",
@@ -272,7 +272,7 @@ utils::globalVariables(c("time", "station_id", "status"))
 
 # The three status levels, in display order (not set up -> operating -> gone).
 .tww_status_levels <- function() {
-  c("未設站", "營運中", "撤銷")
+  c("Not yet established", "Operating", "Decommissioned")
 }
 
 # Default fill palette: grey (not yet) / green (operating) / red (gone).

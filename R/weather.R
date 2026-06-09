@@ -32,7 +32,8 @@
 #' w <- get_weather("467490", "2024-01-01", "2024-01-07")
 #'
 #' # Several stations, daily
-#' wd <- get_weather(c("466920", "466930"), 20240101, 20240131, type = "daily")
+#' wd <- get_weather(c("466920", "466930"), "2024-01-01", "2024-01-31",
+#'                   type = "daily")
 #' }
 #' @export
 get_weather <- function(station_id,
@@ -71,8 +72,10 @@ get_weather <- function(station_id,
   }
 
   attr(out, "type")  <- type
-  attr(out, "start") <- start
-  attr(out, "end")   <- end
+  # Store the window as Date objects so the format is consistent across the
+  # package (station_panel() also carries Date attributes).
+  attr(out, "start") <- as.Date(start, format = "%Y%m%d")
+  attr(out, "end")   <- as.Date(end, format = "%Y%m%d")
   out
 }
 

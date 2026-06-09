@@ -20,7 +20,7 @@ stat <- function(p, id, period) {
 test_that("yearly panel has the right shape and levels", {
   p <- station_panel(make_stations(), 20000101, 20241231, by = "year")
   expect_equal(nrow(p), 4L * 25L)                 # 4 stations x 25 years
-  expect_equal(levels(p$status), c("未設站", "營運中", "撤銷"))
+  expect_equal(levels(p$status), c("Not yet established", "Operating", "Decommissioned"))
   expect_setequal(unique(p$period), as.character(2000:2024))
   expect_s3_class(p$time, "Date")
 })
@@ -29,22 +29,22 @@ test_that("three states are derived from set-up / decommission dates", {
   p <- station_panel(make_stations(), "2000-01-01", "2024-12-31", by = "year")
 
   # A: operating the whole window (no end date)
-  expect_true(all(p$status[p$station_id == "A"] == "營運中"))
+  expect_true(all(p$status[p$station_id == "A"] == "Operating"))
 
   # B: not set up -> operating -> decommissioned, with overlap rules
-  expect_equal(stat(p, "B", "2009"), "未設站")
-  expect_equal(stat(p, "B", "2010"), "營運中")   # set up mid-2010
-  expect_equal(stat(p, "B", "2015"), "營運中")   # decommissioned mid-2015 (overlap)
-  expect_equal(stat(p, "B", "2016"), "撤銷")
+  expect_equal(stat(p, "B", "2009"), "Not yet established")
+  expect_equal(stat(p, "B", "2010"), "Operating")   # set up mid-2010
+  expect_equal(stat(p, "B", "2015"), "Operating")   # decommissioned mid-2015 (overlap)
+  expect_equal(stat(p, "B", "2016"), "Decommissioned")
 
-  # C: unknown dates default to operating, never "未設站"
-  expect_true(all(p$status[p$station_id == "C"] == "營運中"))
-  expect_false(any(p$status[p$station_id == "C"] == "未設站"))
+  # C: unknown dates default to operating, never "Not yet established"
+  expect_true(all(p$status[p$station_id == "C"] == "Operating"))
+  expect_false(any(p$status[p$station_id == "C"] == "Not yet established"))
 
   # D: missing set-up date, so only operating -> decommissioned
-  expect_equal(stat(p, "D", "2005"), "營運中")
-  expect_equal(stat(p, "D", "2006"), "撤銷")
-  expect_false(any(p$status[p$station_id == "D"] == "未設站"))
+  expect_equal(stat(p, "D", "2005"), "Operating")
+  expect_equal(stat(p, "D", "2006"), "Decommissioned")
+  expect_false(any(p$status[p$station_id == "D"] == "Not yet established"))
 })
 
 test_that("by = 'month' produces month columns with correct count", {
@@ -56,7 +56,7 @@ test_that("by = 'month' produces month columns with correct count", {
 test_that("metadata without date columns falls back to operating", {
   st <- data.frame(station_id = c("X", "Y"), stringsAsFactors = FALSE)
   p <- station_panel(st, 20200101, 20201231, by = "year")
-  expect_true(all(p$status == "營運中"))
+  expect_true(all(p$status == "Operating"))
 })
 
 test_that("bad inputs are rejected", {

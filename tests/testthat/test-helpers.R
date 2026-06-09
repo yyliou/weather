@@ -6,6 +6,15 @@ test_that("date normalisation accepts common forms", {
   expect_error(.tww_as_yyyymmdd(c("20240101", "20240102")))
 })
 
+test_that("obs_time is normalised to ISO and dashed values are left alone", {
+  expect_equal(.tww_iso_obs_time(c("20240101", "20240131")),
+               c("2024-01-01", "2024-01-31"))
+  expect_equal(.tww_iso_obs_time("202401"), "2024-01")          # monthly
+  expect_equal(.tww_iso_obs_time("2024-01-01 01:00:00"),
+               "2024-01-01 01:00:00")                            # untouched
+  expect_equal(.tww_iso_obs_time("2024-01-01"), "2024-01-01")    # already ISO
+})
+
 test_that("url is built correctly and omits type for hourly", {
   u <- .tww_build_url("467490", "20240101", "20240107", "hourly")
   expect_false(grepl("type=", u))
