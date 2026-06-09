@@ -195,14 +195,22 @@ assign_township <- function(stations, boundaries) {
 
   pts <- sf::st_as_sf(stations[ok, , drop = FALSE],
                       coords = c("lon", "lat"), crs = 4326, remove = FALSE)
-  suppressWarnings(sf::st_agr(boundaries) <- "constant")
-  joined <- sf::st_join(pts, boundaries, join = sf::st_within, left = TRUE)
+  # `stations` may already carry `township`/`county` columns (we just seeded
+  # `township`, and get_stations() supplies `county`). Rename the boundary
+  # attributes so st_join doesn't suffix the clashing names to .x/.y, which
+  # would leave joined$township/$county NULL.
+  geom <- attr(boundaries, "sf_column")
+  bnd <- boundaries[, c("township", "county", geom)]
+  names(bnd)[match(c("township", "county"), names(bnd))] <-
+    c(".bnd_township", ".bnd_county")
+  suppressWarnings(sf::st_agr(bnd) <- "constant")
+  joined <- sf::st_join(pts, bnd, join = sf::st_within, left = TRUE)
   # st_join can duplicate a point if polygons overlap; keep the first match
   joined <- joined[!duplicated(joined$station_id), , drop = FALSE]
 
   idx <- match(stations$station_id[ok], joined$station_id)
-  stations$township[ok]  <- joined$township[idx]
-  stations$county_geo[ok] <- joined$county[idx]
+  stations$township[ok]   <- joined$.bnd_township[idx]
+  stations$county_geo[ok]  <- joined$.bnd_county[idx]
   stations
 }
 
