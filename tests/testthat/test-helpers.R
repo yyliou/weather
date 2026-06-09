@@ -64,3 +64,24 @@ test_that("station id is parsed from zip member names", {
   expect_equal(.tww_id_from_name("466920_20190816-20190913.csv"), "466920")
   expect_equal(.tww_id_from_name("/tmp/x/467490.csv"), "467490")
 })
+
+test_that("zip member ids are matched against the requested ids", {
+  ids <- c("466920", "467490", "72G600")
+  expect_equal(.tww_match_id("467490_20240101-20240107.csv", ids), "467490")
+  # code is NOT the leading token (prefix / Chinese name) - the weak point the
+  # plain leading-token parse got wrong, leaving nothing to match the station
+  expect_equal(.tww_match_id("stationData_466920_2024.csv", ids), "466920")
+  expect_equal(.tww_match_id("臺中_467490.csv", ids), "467490")
+  expect_equal(.tww_match_id("72G600.csv", ids), "72G600")
+  # nothing matches -> falls back to the leading token
+  expect_equal(.tww_match_id("weird.csv", ids), "weird")
+})
+
+test_that("an in-file station column is detected", {
+  df <- data.frame(obs_time = "t", station_id = "466920", temp = 1,
+                   check.names = FALSE, stringsAsFactors = FALSE)
+  expect_equal(.tww_station_col(df), "station_id")
+  plain <- data.frame(obs_time = "t", temp = 1,
+                      check.names = FALSE, stringsAsFactors = FALSE)
+  expect_true(is.na(.tww_station_col(plain)))
+})

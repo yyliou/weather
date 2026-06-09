@@ -682,7 +682,12 @@ get_region_weather <- function(start, end,
   slat    <- stations$lat[smatch[keep]]
   ns      <- length(sid)
   if (ns == 0L) {
-    stop("None of the downloaded stations have coordinates; cannot reduce.",
+    stop("Could not match any downloaded observation back to a station in the ",
+         "station table (so no coordinates are available to reduce). This ",
+         "usually means the multi-station download keyed its files in an ",
+         "unexpected way. Downloaded ids seen: ",
+         paste(utils::head(sid_obs, 5), collapse = ", "),
+         if (length(sid_obs) > 5) ", ..." else "",
          call. = FALSE)
   }
 

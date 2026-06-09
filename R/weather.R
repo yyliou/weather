@@ -140,7 +140,15 @@ get_weather <- function(station_id,
   parts <- lapply(files, function(f) {
     df <- .tww_read_csv(f, na_codes, clean)
     if (nrow(df) == 0L) return(NULL)   # station had no data in window -> skip
-    cbind(station_id = .tww_id_from_name(f), df, stringsAsFactors = FALSE)
+    # Prefer a station column carried inside the file (combined responses);
+    # otherwise recover the id from the member name, matched against `ids`.
+    sc <- .tww_station_col(df)
+    if (!is.na(sc)) {
+      sid <- as.character(df[[sc]])
+      df[[sc]] <- NULL
+      return(cbind(station_id = sid, df, stringsAsFactors = FALSE))
+    }
+    cbind(station_id = .tww_match_id(f, ids), df, stringsAsFactors = FALSE)
   })
 
   .tww_rbind_fill(parts)

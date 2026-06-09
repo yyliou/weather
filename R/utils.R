@@ -272,3 +272,34 @@
   m <- regmatches(base, regexpr("^[A-Za-z0-9]+", base))
   if (length(m) == 0L || m == "") base else m
 }
+
+# Recover which requested station a zip member belongs to. The CWB downloader's
+# member names are not always "<code>_<dates>.csv": they can carry a prefix
+# (e.g. "stationData_466920_2024.csv") or the station's Chinese name, which the
+# leading-token parse above gets wrong and then nothing matches the station
+# table. So we first look for any *requested* id appearing anywhere in the file
+# name (longest match wins, so "466920" beats a stray "4669"), and only fall
+# back to the leading-token parse when none is found.
+.tww_match_id <- function(fname, ids) {
+  base <- basename(fname)
+  ids  <- ids[!is.na(ids) & nzchar(ids)]
+  if (length(ids)) {
+    hit <- ids[vapply(ids, function(id) grepl(id, base, fixed = TRUE),
+                      logical(1))]
+    if (length(hit)) return(hit[order(nchar(hit), decreasing = TRUE)][1])
+  }
+  .tww_id_from_name(fname)
+}
+
+# Detect a station-id column *inside* a CSV (some responses bundle every station
+# into one file with a station column instead of one file per station). Returns
+# the column name, or NA if none. The observation-time column has already been
+# renamed to `obs_time`, so it is never mistaken for a station column.
+.tww_station_col <- function(df) {
+  nm  <- names(df)
+  low <- tolower(nm)
+  cands <- c("station_id", "stationid", "station", "stno", "stid", "stn",
+             "站號", "站碼", "測站", "測站站號", "測站代碼", "stationcode")
+  hit <- which(low %in% cands | nm %in% cands)
+  if (length(hit)) nm[hit[1]] else NA_character_
+}
