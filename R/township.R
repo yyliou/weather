@@ -137,10 +137,14 @@ load_tw_townships <- function(source = NULL,
     }
     NA_character_
   }
+  # "township"/"county" are listed first so re-standardising an already
+  # standardised layer (e.g. the sf returned by load_tw_townships()) is
+  # idempotent instead of failing to find a name column.
   tf <- pick(town_field,
-             c("townname", "town", "t_name", "townshipname", "name", "t_uname"))
+             c("township", "townname", "town", "t_name", "townshipname",
+               "name", "t_uname"))
   cf <- pick(county_field,
-             c("countyname", "county", "c_name", "county_name", "cn"))
+             c("county", "countyname", "c_name", "county_name", "cn"))
   if (is.na(tf)) {
     stop("Could not find a township-name column in the boundary layer. ",
          "Columns present: ", paste(nm, collapse = ", "),
