@@ -1,7 +1,5 @@
-# Tests for the average-then-interpolate engine. These exercise the pure numeric
-# core (.tww_reduce_regions / .tww_haversine_km) and need no network or sf.
-# `in_ids = list(character(0))` forces the IDW gap-fill path; a populated
-# `in_ids` exercises the in-region average.
+# Tests for the pure IDW interpolation engine (.tww_idw_interpolate /
+# .tww_haversine_km / .tww_nearest_ids). No network or sf needed.
 
 test_that("haversine distance is symmetric and ~known", {
   # Taipei (121.50, 25.04) to Kaohsiung (120.30, 22.62) is ~290 km.
@@ -11,26 +9,7 @@ test_that("haversine distance is symmetric and ~known", {
   expect_equal(.tww_haversine_km(0, 0, 0, 0), 0)
 })
 
-test_that("in-region stations are averaged (equal weight, rainfall too)", {
-  targets  <- data.frame(region = "R", lon = 0, lat = 0,
-                         stringsAsFactors = FALSE)
-  # A near, B far - but both inside R, so plain mean (not distance-weighted).
-  stations <- data.frame(station_id = c("A", "B"), name = c("a", "b"),
-                         lon = c(0.1, 1.0), lat = c(0, 0),
-                         stringsAsFactors = FALSE)
-  obs <- data.frame(station_id = c("A", "B"), obs_time = "d1",
-                    temp = c(10, 30),
-                    `降水量(mm)` = c(2, 6),
-                    check.names = FALSE, stringsAsFactors = FALSE)
-  out <- .tww_reduce_regions(obs, targets, stations, id_cols = "region",
-                             in_ids = list(c("A", "B")))
-  expect_equal(out$temp, 20)               # mean(10, 30), not IDW (~10.2)
-  expect_equal(out[["降水量(mm)"]], 4)     # mean(2, 6), not sum (8)
-  expect_false(out$used_fallback)
-  expect_equal(out$n_stations, 2L)
-})
-
-test_that("gap fill uses IDW of the k nearest stations with data", {
+test_that("IDW blends the k nearest stations by inverse-distance weight", {
   targets  <- data.frame(townid = "T", lon = 0, lat = 0,
                          stringsAsFactors = FALSE)
   stations <- data.frame(station_id = c("A", "B", "C"),
@@ -40,40 +19,34 @@ test_that("gap fill uses IDW of the k nearest stations with data", {
   obs <- data.frame(
     station_id = c("A", "B", "C", "A", "B", "C"),
     obs_time   = c("d1", "d1", "d1", "d2", "d2", "d2"),
-    temp       = c(10, 20, 99, NA, 20, 30),
+    temp       = c(10, 20, 99, NA, 20, 30),   # A missing on d2; C never near
     check.names = FALSE, stringsAsFactors = FALSE)
 
-  out <- .tww_reduce_regions(obs, targets, stations, id_cols = "townid",
-                             in_ids = list(character(0)),   # no members -> IDW
-                             power = 2, k_nearest = 2)
-  expect_equal(nrow(out), 2L)
+  out <- .tww_idw_interpolate(obs, targets, stations,
+                              id_cols = "townid", power = 2, k_nearest = 2)
+  expect_equal(nrow(out), 2L)                       # one row per time step
   d1 <- out[out$obs_time == "d1", ]
-  expect_equal(round(d1$temp, 6), round((4 * 10 + 1 * 20) / 5, 6))  # C excluded
-  expect_true(d1$used_fallback)
+  # dB = 2*dA -> weights 1/dA^2 : 1/dB^2 = 4 : 1, C excluded by k = 2
+  expect_equal(round(d1$temp, 6), round((4 * 10 + 1 * 20) / 5, 6))
   d2 <- out[out$obs_time == "d2", ]
-  expect_equal(d2$temp, 20)                # A is NA -> only B carries
+  expect_equal(d2$temp, 20)                         # A is NA -> only B carries
 })
 
-test_that("average where present, IDW fill where missing, flagged per row", {
+test_that("rainfall is interpolated, not summed", {
   targets  <- data.frame(region = "R", lon = 0, lat = 0,
                          stringsAsFactors = FALSE)
   stations <- data.frame(station_id = c("A", "B"), name = c("a", "b"),
-                         lon = c(0.05, 0.3), lat = c(0, 0),
+                         lon = c(0.1, 0.1), lat = c(0.1, -0.1),  # equidistant
                          stringsAsFactors = FALSE)
-  obs <- data.frame(
-    station_id = c("A", "B"),
-    obs_time   = c("d1", "d1"),
-    temp       = c(15, 99),     # A inside reports temp; B's temp is not a member
-    pres       = c(NA, 1010),   # A has no pressure; B (nearby) does
-    check.names = FALSE, stringsAsFactors = FALSE)
-  out <- .tww_reduce_regions(obs, targets, stations, id_cols = "region",
-                             in_ids = list(c("A")))   # only A inside R
-  expect_equal(out$temp, 15)          # averaged from in-region A (B ignored)
-  expect_equal(out$pres, 1010)        # gap filled by IDW from nearby B
-  expect_true(out$used_fallback)
+  obs <- data.frame(station_id = c("A", "B"), obs_time = "d1",
+                    `降水量(mm)` = c(2, 6),
+                    check.names = FALSE, stringsAsFactors = FALSE)
+  out <- .tww_idw_interpolate(obs, targets, stations, id_cols = "region",
+                              k_nearest = 2)
+  expect_equal(out[["降水量(mm)"]], 4)             # mean(2, 6), not sum (8)
 })
 
-test_that("a cell with no reporting station stays NA; others still filled", {
+test_that("a cell with no reporting station is NA; others still filled", {
   targets  <- data.frame(region = "R", lon = 0, lat = 0,
                          stringsAsFactors = FALSE)
   stations <- data.frame(station_id = c("A", "B"), name = c("a", "b"),
@@ -85,13 +58,13 @@ test_that("a cell with no reporting station stays NA; others still filled", {
     rain       = c(NA, NA),
     temp       = c(15, 25),
     check.names = FALSE, stringsAsFactors = FALSE)
-  out <- .tww_reduce_regions(obs, targets, stations, id_cols = "region",
-                             in_ids = list(character(0)), k_nearest = 5)
+  out <- .tww_idw_interpolate(obs, targets, stations,
+                              id_cols = "region", k_nearest = 5)
   expect_true(is.na(out$rain))
   expect_false(is.na(out$temp))
 })
 
-test_that("max_dist excludes gap-fill stations beyond the cap (km)", {
+test_that("max_dist excludes stations beyond the cap (km)", {
   targets  <- data.frame(region = "R", lon = 0, lat = 0,
                          stringsAsFactors = FALSE)
   # A ~11 km east, B ~111 km east.
@@ -101,13 +74,11 @@ test_that("max_dist excludes gap-fill stations beyond the cap (km)", {
   obs <- data.frame(station_id = c("A", "B"), obs_time = "d1",
                     temp = c(10, 30),
                     check.names = FALSE, stringsAsFactors = FALSE)
-  near <- .tww_reduce_regions(obs, targets, stations, id_cols = "region",
-                              in_ids = list(character(0)),
-                              k_nearest = 5, max_dist = 50)
+  near <- .tww_idw_interpolate(obs, targets, stations, id_cols = "region",
+                               k_nearest = 5, max_dist = 50)
   expect_equal(near$temp, 10)                       # only A within 50 km
-  both <- .tww_reduce_regions(obs, targets, stations, id_cols = "region",
-                              in_ids = list(character(0)),
-                              k_nearest = 5, max_dist = NULL)
+  both <- .tww_idw_interpolate(obs, targets, stations, id_cols = "region",
+                               k_nearest = 5, max_dist = NULL)
   expect_true(both$temp > 10 && both$temp < 30)     # blend of A and B
 })
 
@@ -120,8 +91,8 @@ test_that("a station on the target point is used directly (no Inf weight)", {
   obs <- data.frame(station_id = c("A", "B"), obs_time = "d1",
                     temp = c(18, 28),
                     check.names = FALSE, stringsAsFactors = FALSE)
-  out <- .tww_reduce_regions(obs, targets, stations, id_cols = "region",
-                             in_ids = list(character(0)), k_nearest = 2)
+  out <- .tww_idw_interpolate(obs, targets, stations, id_cols = "region",
+                              k_nearest = 2)
   expect_equal(out$temp, 18)                        # A coincides with the point
   expect_true(is.finite(out$temp))
 })
@@ -145,9 +116,7 @@ test_that("empty observations yield a stable zero-row schema", {
   obs <- data.frame(station_id = character(0), obs_time = character(0),
                     temp = numeric(0),
                     check.names = FALSE, stringsAsFactors = FALSE)
-  out <- .tww_reduce_regions(obs, targets, stations, id_cols = "region",
-                             in_ids = list(character(0)))
+  out <- .tww_idw_interpolate(obs, targets, stations, id_cols = "region")
   expect_equal(nrow(out), 0L)
-  expect_true(all(c("region", "obs_time", "n_stations", "used_fallback")
-                  %in% names(out)))
+  expect_true(all(c("region", "obs_time", "n_stations") %in% names(out)))
 })

@@ -234,27 +234,23 @@ assign_township <- function(stations, boundaries) {
   stations
 }
 
-#' Average weather to township level, interpolating only the gaps
+#' Interpolate weather to township level (inverse-distance weighting)
 #'
-#' The end-to-end township helper, in two stages:
+#' Estimates each township's weather by **pure spatial interpolation**: for every
+#' township, time step and variable the value is the inverse-distance-weighted
+#' (IDW) mean of the `k_nearest` stations that report it:
+#' \deqn{v = \frac{\sum_i w_i x_i}{\sum_i w_i}, \qquad w_i = 1 / d_i^{power}}
+#' where \eqn{d_i} is the great-circle distance from the township's
+#' representative point to station \eqn{i}. Every numeric variable — rainfall
+#' included — is interpolated; nothing is averaged over a township's own
+#' stations (a station sitting on the representative point is used directly, so
+#' nearby stations still dominate naturally).
 #'
-#' \enumerate{
-#'   \item **Average** the stations that fall inside each township (rainfall
-#'     included: a mean of the in-township gauges) for every time step and
-#'     variable. This is the cheap, common case.
-#'   \item **Fill** only the cells still missing — a township with no station of
-#'     its own, or a variable its own stations never report (e.g. pressure in a
-#'     rain-gauge-only district) — by inverse-distance weighting (IDW) of the
-#'     `k_nearest` surrounding stations that do report it:
-#'     \deqn{v = \frac{\sum_i w_i x_i}{\sum_i w_i}, \qquad w_i = 1 / d_i^{power}}
-#'     where \eqn{d_i} is the great-circle distance from the township's
-#'     representative point to station \eqn{i}.
-#' }
-#'
-#' Only the in-township stations **plus a nearest pool** (`pool_size`) are
-#' downloaded — not every station in the country — so a request for a few
-#' townships is fast. The result is still a complete, gap-free panel: one row per
-#' township per time step.
+#' Recommended as **two steps**: first download the measurement data once with
+#' [get_weather()], then pass it here via `obs=` to interpolate (optionally many
+#' times, for different `townid` subsets or settings) without re-downloading. If
+#' `obs` is omitted, the nearest `pool_size` stations to each township are
+#' downloaded automatically.
 #'
 #' Townships are identified by their official township code, `townid` (the
 #' `TOWNID` / `TOWNCODE` field on the NLSC layer): a single unique key that
@@ -262,42 +258,41 @@ assign_township <- function(stations, boundaries) {
 #' `boundaries` layer must therefore carry a township-code column;
 #' [load_tw_townships()] keeps it automatically.
 #'
-#' @param start,end,type Passed to [get_weather()]. For `type = "monthly"` the
-#'   end date is automatically extended to the end of its month, since the
-#'   source only returns a month's record once the window reaches it.
+#' @param start,end,type Passed to [get_weather()] when `obs` is not supplied.
+#'   For `type = "monthly"` the end date is automatically extended to the end of
+#'   its month, since the source only returns a month's record once the window
+#'   reaches it.
 #' @param boundaries Township boundaries: an \pkg{sf} object from
 #'   [load_tw_townships()], or a path/URL it can read. Must include a township
 #'   code column (`TOWNID` / `TOWNCODE`, kept as `townid`).
 #' @param townid Optional character vector of township codes to keep
 #'   (e.g. `c("66000040", "66000050")`). `NULL` (default) returns every township
 #'   in `boundaries`.
-#' @param power IDW distance exponent used when filling gaps. Higher values give
-#'   nearer stations more relative weight. Default `2`.
-#' @param k_nearest Number of nearest stations blended when filling a gap cell.
-#'   Default `8`.
-#' @param max_dist Optional cap (in **kilometres**) on how far a gap-filling
+#' @param power IDW distance exponent. Higher values give nearer stations more
+#'   relative weight. Default `2`.
+#' @param k_nearest Number of nearest stations (with a value for that variable at
+#'   that time) blended for each cell. Default `8`.
+#' @param max_dist Optional cap (in **kilometres**) on how far a contributing
 #'   station may be from the township. Stations beyond it are ignored; a cell
-#'   with no station within range stays `NA`. `NULL` (default) imposes no cap.
-#' @param pool_size Number of nearest stations (per township) downloaded as the
-#'   gap-fill pool, on top of the in-township stations. `NULL` (default) uses
-#'   `max(30, 3 * k_nearest)`. Larger values fill more reliably but download
-#'   more.
+#'   with no station within range is `NA`. `NULL` (default) imposes no cap.
+#' @param pool_size Number of nearest stations (per township) downloaded to
+#'   interpolate from when `obs` is not supplied. `NULL` (default) uses
+#'   `max(30, 3 * k_nearest)`. Larger values give more complete coverage but
+#'   download more. Ignored when `obs` is supplied.
 #' @param stations Optional pre-fetched station table (from [get_stations()]).
 #'   If `NULL`, it is downloaded.
 #' @param obs Optional pre-downloaded observations (a [get_weather()] result) to
-#'   reuse instead of downloading. When supplied, no network call is made and the
-#'   download/`pool_size` step is skipped — average and gap-fill run directly on
-#'   `obs`. This is the fast path for repeated runs or many townships: download
-#'   once for all stations, save it (e.g. with `saveRDS()`), and pass it back
-#'   here. Use the same `stations` table you built `obs` from so coordinates
-#'   line up.
+#'   interpolate from instead of downloading. When supplied, no network call is
+#'   made and the `pool_size` step is skipped. This is the recommended fast path
+#'   for repeated runs or many townships: download once (e.g. for every station),
+#'   optionally `saveRDS()` it, and pass it back here. Use the same `stations`
+#'   table you built `obs` from so coordinates line up.
 #' @param clean,na_codes,quiet Passed to [get_weather()].
 #'
 #' @return A data frame with `townid`, `county`, `township`, `obs_time`, one
-#'   column per variable, `n_stations` (in-township stations feeding the row) and
-#'   `used_fallback` (`TRUE` when any cell in the row was filled by IDW rather
-#'   than averaged). The IDW power is kept in the `power` attribute and the
-#'   in-township station ids in `stations`.
+#'   column per interpolated variable, and `n_stations` (nearby stations
+#'   reporting at that time step). The IDW power is kept in the `power` attribute
+#'   and the source station ids in `stations`.
 #'
 #' @examples
 #' \dontrun{
@@ -352,8 +347,6 @@ get_township_weather <- function(start, end,
     stop("No stations with usable coordinates to interpolate from.",
          call. = FALSE)
   }
-  # which township each station sits in (drives the in-township average)
-  stations <- assign_township(stations, boundaries)
 
   # townid -> county / township display labels, carried onto the output.
   lab <- data.frame(
@@ -388,19 +381,15 @@ get_township_weather <- function(start, end,
   targets <- targets[, c("townid", "county", "township", "lon", "lat"),
                      drop = FALSE]
 
-  # stations inside each township feed the in-township average
-  in_ids <- lapply(targets$townid, function(id)
-    stations$station_id[!is.na(stations$townid) & stations$townid == id])
-
   if (is.null(obs)) {
-    # download only the in-township stations plus a nearest pool to fill gaps
+    # download the nearest pool of stations to each township to interpolate from
     pool <- if (is.null(pool_size)) {
       max(30L, 3L * as.integer(k_nearest))
     } else {
       max(as.integer(pool_size), as.integer(k_nearest))
     }
     near_ids <- .tww_nearest_ids(targets, stations, pool)
-    need_ids <- unique(c(unlist(in_ids), unlist(near_ids)))
+    need_ids <- unique(unlist(near_ids))
     need_ids <- need_ids[!is.na(need_ids) & nzchar(need_ids)]
     if (length(need_ids) == 0L) {
       stop("No stations available for the requested township(s).", call. = FALSE)
@@ -411,13 +400,12 @@ get_township_weather <- function(start, end,
     obs <- .tww_check_obs(obs)
   }
 
-  out <- .tww_reduce_regions(
+  out <- .tww_idw_interpolate(
     obs, targets, stations,
     id_cols   = c("townid", "county", "township"),
-    in_ids    = in_ids,
     power     = power, k_nearest = k_nearest, max_dist = max_dist)
 
-  used <- unique(unlist(in_ids))
+  used <- unique(as.character(obs$station_id))
   used <- used[!is.na(used) & nzchar(used)]
   attr(out, "stations") <- stats::setNames(
     used, stations$name[match(used, stations$station_id)])
@@ -432,11 +420,10 @@ get_township_weather <- function(start, end,
 #' official township layer, you supply **your own** boundary polygons (any
 #' source [sf::st_read()] can read — a shapefile, GeoPackage, GeoJSON, a zipped
 #' shapefile, local or URL — or an already-loaded \pkg{sf} object) and name the
-#' column that identifies each region. Each region is averaged from the stations
-#' inside it, and only the remaining gaps are filled by inverse-distance
-#' weighting of nearby stations — exactly as in [get_township_weather()]
-#' (rainfall included), downloading only the in-region stations plus a nearest
-#' pool.
+#' column that identifies each region. Each region is interpolated from the
+#' `k_nearest` stations by inverse-distance weighting — exactly as in
+#' [get_township_weather()] (rainfall included), downloading the nearest pool of
+#' stations to each region when `obs` is not supplied.
 #'
 #' @param start,end,type Passed to [get_weather()]. For `type = "monthly"` the
 #'   end date is extended to the end of its month (see [get_township_weather()]).
@@ -448,18 +435,18 @@ get_township_weather <- function(start, end,
 #'   one region (their geometries are unioned for the point lookup).
 #' @param regions Optional character vector of `id_field` values to keep. `NULL`
 #'   (default) returns every region in `shp`.
-#' @param power,k_nearest,max_dist,pool_size Averaging / gap-fill settings, as in
+#' @param power,k_nearest,max_dist,pool_size IDW settings, as in
 #'   [get_township_weather()].
 #' @param stations Optional pre-fetched station table (from [get_stations()]).
 #'   If `NULL`, it is downloaded.
 #' @param obs Optional pre-downloaded observations (a [get_weather()] result) to
-#'   reuse instead of downloading, as in [get_township_weather()].
+#'   interpolate from instead of downloading, as in [get_township_weather()].
 #' @param clean,na_codes,quiet Passed to [get_weather()].
 #'
-#' @return A data frame with `region`, `obs_time`, one column per variable,
-#'   `n_stations` (in-region stations feeding the row) and `used_fallback`
-#'   (`TRUE` when any cell was filled by IDW). The power is kept in the `power`
-#'   attribute and the in-region station ids in `stations`.
+#' @return A data frame with `region`, `obs_time`, one column per interpolated
+#'   variable, and `n_stations` (nearby stations reporting at that time step).
+#'   The power is kept in the `power` attribute and the source station ids in
+#'   `stations`.
 #'
 #' @seealso [get_township_weather()], [load_tw_townships()]
 #'
@@ -506,8 +493,6 @@ get_region_weather <- function(start, end,
     stop("No stations with usable coordinates to interpolate from.",
          call. = FALSE)
   }
-  # which region each station sits in (drives the in-region average)
-  stations <- .tww_assign_region(stations, boundaries)
 
   all_regions <- unique(boundaries$region)
   all_regions <- all_regions[!is.na(all_regions) & nzchar(all_regions)]
@@ -526,10 +511,6 @@ get_region_weather <- function(start, end,
 
   targets <- .tww_region_points(boundaries, key = "region", ids = all_regions)
 
-  # stations inside each region feed the in-region average
-  in_ids <- lapply(targets$region, function(id)
-    stations$station_id[!is.na(stations$region) & stations$region == id])
-
   if (is.null(obs)) {
     pool <- if (is.null(pool_size)) {
       max(30L, 3L * as.integer(k_nearest))
@@ -537,7 +518,7 @@ get_region_weather <- function(start, end,
       max(as.integer(pool_size), as.integer(k_nearest))
     }
     near_ids <- .tww_nearest_ids(targets, stations, pool)
-    need_ids <- unique(c(unlist(in_ids), unlist(near_ids)))
+    need_ids <- unique(unlist(near_ids))
     need_ids <- need_ids[!is.na(need_ids) & nzchar(need_ids)]
     if (length(need_ids) == 0L) {
       stop("No stations available for the requested region(s).", call. = FALSE)
@@ -548,13 +529,12 @@ get_region_weather <- function(start, end,
     obs <- .tww_check_obs(obs)
   }
 
-  out <- .tww_reduce_regions(
+  out <- .tww_idw_interpolate(
     obs, targets, stations,
     id_cols   = "region",
-    in_ids    = in_ids,
     power     = power, k_nearest = k_nearest, max_dist = max_dist)
 
-  used <- unique(unlist(in_ids))
+  used <- unique(as.character(obs$station_id))
   used <- used[!is.na(used) & nzchar(used)]
   attr(out, "stations") <- stats::setNames(
     used, stations$name[match(used, stations$station_id)])
@@ -655,23 +635,21 @@ get_region_weather <- function(start, end,
   })
 }
 
-# Reduce station observations to one row per region per time step in two stages:
-#  1. AVERAGE the stations that fall inside the region (`in_ids`) - the cheap,
-#     common case (rainfall included: a mean of the in-region gauges).
-#  2. Only for cells still missing (a region with no station, or a variable its
-#     own stations never report) FILL by inverse-distance weighting of the
-#     `k_nearest` stations that do report it: v = sum w_i x_i / sum w_i with
-#     w_i = 1 / d_i^power, d_i the great-circle km to the region's point. The
-#     distance matrix and weights are built lazily, so variables fully covered
-#     by in-region stations cost nothing beyond the average.
-# Everything is matrix products vectorised over time, touching only the
-# downloaded stations, so it stays fast.
+# Interpolate station observations to one row per region per time step by pure
+# inverse-distance weighting (IDW). For each region, time step and variable the
+# value is the IDW of the `k_nearest` stations that report it:
+#   v = sum_i w_i x_i / sum_i w_i ,  w_i = 1 / d_i^power
+# with d_i the great-circle km from the region's representative point to station
+# i (stations beyond `max_dist`, if given, are excluded; a station sitting on the
+# point is used directly). A station that is NA for a cell drops out of that
+# cell's weighting, so a cell is NA only when no station within range reports the
+# variable at that time. Every numeric variable -- rainfall included -- is
+# interpolated; nothing is averaged. All vectorised over time as matrix products.
 #
 # `targets`  : data.frame with `id_cols` plus numeric `lon`, `lat`.
-# `stations` : data.frame with `station_id`, `lon`, `lat` (the downloaded set).
-# `in_ids`   : list (aligned with `targets` rows) of in-region station ids.
-.tww_reduce_regions <- function(obs, targets, stations, id_cols, in_ids,
-                                power = 2, k_nearest = 8, max_dist = NULL) {
+# `stations` : data.frame with `station_id`, `lon`, `lat`.
+.tww_idw_interpolate <- function(obs, targets, stations, id_cols,
+                                 power = 2, k_nearest = 8, max_dist = NULL) {
   meta_cols  <- c("station_id", "obs_time")
   value_cols <- setdiff(names(obs), meta_cols)
   num_cols   <- value_cols[vapply(obs[value_cols], is.numeric, logical(1))]
@@ -679,13 +657,13 @@ get_region_weather <- function(start, end,
   nreg  <- nrow(targets)
   nt    <- length(times)
 
-  # Stable, zero-row schema when there is nothing to reduce.
+  # Stable, zero-row schema when there is nothing to interpolate.
   if (nreg == 0L || nt == 0L || length(num_cols) == 0L) {
     empty <- c(
       stats::setNames(lapply(id_cols, function(.) character(0)), id_cols),
       list(obs_time = character(0)),
       stats::setNames(lapply(num_cols, function(.) numeric(0)), num_cols),
-      list(n_stations = integer(0), used_fallback = logical(0)))
+      list(n_stations = integer(0)))
     return(do.call(data.frame,
                    c(empty, list(check.names = FALSE, stringsAsFactors = FALSE))))
   }
@@ -700,7 +678,7 @@ get_region_weather <- function(start, end,
   ns      <- length(sid)
   if (ns == 0L) {
     stop("Could not match any downloaded observation back to a station in the ",
-         "station table (so no coordinates are available to reduce). This ",
+         "station table (so no coordinates are available to interpolate). This ",
          "usually means the multi-station download keyed its files in an ",
          "unexpected way. Downloaded ids seen: ",
          paste(utils::head(sid_obs, 5), collapse = ", "),
@@ -712,23 +690,16 @@ get_region_weather <- function(start, end,
   t_idx <- match(obs$obs_time, times)
   cell  <- (t_idx - 1L) * ns + s_idx                  # column-major into ns x nt
 
-  # Membership matrix A (nreg x ns): 1 where a station is inside the region.
-  A <- matrix(0, nreg, ns)
-  for (i in seq_len(nreg)) {
-    hit <- which(sid %in% as.character(in_ids[[i]]))
-    if (length(hit)) A[i, hit] <- 1
+  # target x station great-circle distance matrix (km)
+  D <- matrix(NA_real_, nreg, ns)
+  for (r in seq_len(nreg)) {
+    D[r, ] <- .tww_haversine_km(targets$lon[r], targets$lat[r], slon, slat)
   }
 
   zero <- 1e-9
   kk   <- max(1L, as.integer(k_nearest))
-  D    <- NULL                                        # built lazily on first gap
+  # Weight matrix (nreg x length(cols)) for the k nearest of station `cols`.
   build_W <- function(cols) {
-    if (is.null(D)) {
-      D <<- matrix(NA_real_, nreg, ns)
-      for (r in seq_len(nreg)) {
-        D[r, ] <<- .tww_haversine_km(targets$lon[r], targets$lat[r], slon, slat)
-      }
-    }
     W <- matrix(0, nreg, length(cols))
     if (!length(cols)) return(W)
     for (r in seq_len(nreg)) {
@@ -747,16 +718,16 @@ get_region_weather <- function(start, end,
     W
   }
 
-  # n_stations: in-region stations reporting any value at each time step.
+  # n_stations: among the k nearest stations overall, how many report any value
+  # at each time step.
   row_has <- rep(FALSE, nrow(obs))
   for (col in num_cols) row_has <- row_has | is.finite(obs[[col]])
   present_any <- matrix(0, ns, nt)
   ok_any <- !is.na(cell) & row_has
   present_any[cell[ok_any]] <- 1
-  n_mat <- A %*% present_any
+  n_mat <- (build_W(seq_len(ns)) > 0) %*% present_any
 
   out_val <- stats::setNames(vector("list", length(num_cols)), num_cols)
-  fb_mat  <- matrix(FALSE, nreg, nt)
   for (col in num_cols) {
     M <- matrix(NA_real_, ns, nt)
     ok <- !is.na(cell) & is.finite(obs[[col]])
@@ -766,24 +737,15 @@ get_region_weather <- function(start, end,
     Mfill <- M
     Mfill[!is.finite(Mfill)] <- 0
 
-    # stage 1: in-region average (equal weights)
-    val <- (A %*% Mfill) / (A %*% present)
-    val[!is.finite(val)] <- NA_real_
-
-    # stage 2: fill remaining gaps by IDW (only when there are any)
-    gap <- is.na(val)
-    if (any(gap)) {
-      has_data <- which(rowSums(present) > 0)
-      if (length(has_data)) {
-        W   <- build_W(has_data)
-        idw <- (W %*% Mfill[has_data, , drop = FALSE]) /
-               (W %*% present[has_data, , drop = FALSE])
-        idw[!is.finite(idw)] <- NA_real_
-        fill <- gap & !is.na(idw)
-        val[fill] <- idw[fill]
-        fb_mat <- fb_mat | fill
-      }
+    has_data <- which(rowSums(present) > 0)
+    if (!length(has_data)) {
+      out_val[[col]] <- rep(NA_real_, nreg * nt)
+      next
     }
+    W   <- build_W(has_data)
+    val <- (W %*% Mfill[has_data, , drop = FALSE]) /
+           (W %*% present[has_data, , drop = FALSE])
+    val[!is.finite(val)] <- NA_real_
     out_val[[col]] <- as.vector(t(val))               # region slow, time fast
   }
 
@@ -795,8 +757,7 @@ get_region_weather <- function(start, end,
 
   out <- do.call(data.frame,
                  c(out_id, list(obs_time = out_time), out_val,
-                   list(n_stations = n_stations,
-                        used_fallback = as.vector(t(fb_mat))),
+                   list(n_stations = n_stations),
                    list(check.names = FALSE, stringsAsFactors = FALSE)))
   ord <- do.call(order, c(lapply(id_cols, function(cc) out[[cc]]),
                           list(out$obs_time)))

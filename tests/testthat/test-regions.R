@@ -107,15 +107,15 @@ test_that("get_township_weather runs offline when stations and obs are given", {
   )
   tw <- get_township_weather(
     start = "2024-01-01", end = "2024-01-02", type = "daily",
-    boundaries = bnd, stations = stations, obs = obs)
+    boundaries = bnd, stations = stations, obs = obs, k_nearest = 1)
 
   expect_equal(nrow(tw), 4L)                       # 2 townships x 2 days
   expect_setequal(tw$townid, c("L01", "R01"))
-  expect_false(any(tw$used_fallback))              # each township has its own
+  # k_nearest = 1 -> each township takes its single nearest station
   l1 <- tw[tw$townid == "L01" & tw$obs_time == "2024-01-01", ]
-  expect_equal(l1[["氣溫(℃)"]], 18)                # station A inside L01
+  expect_equal(l1[["氣溫(℃)"]], 18)                # nearest to L01 is A
   r2 <- tw[tw$townid == "R01" & tw$obs_time == "2024-01-02", ]
-  expect_equal(r2[["氣溫(℃)"]], 22)                # station B inside R01
+  expect_equal(r2[["氣溫(℃)"]], 22)                # nearest to R01 is B
 })
 
 test_that("get_township_weather rejects a malformed obs table", {

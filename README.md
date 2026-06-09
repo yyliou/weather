@@ -117,157 +117,121 @@ wd <- get_weather(c("466920", "466930"), "2024-01-01", "2024-01-31", type = "dai
   missing-value sentinels (e.g. `-99.8`, `-9999`, and literal text like `"NA"` /
   `"--"`) become `NA`.
 
-## 4. Township values (average, then fill gaps)
+## 4. Interpolate to any polygons
 
-A **hybrid** method, applied to every *township × time step × variable* cell:
+One engine interpolates weather to **whatever polygons you give it**.
+`get_region_weather()` is the general function; **`get_township_weather()` is
+just a convenience wrapper** for the official township layer (a special case: it
+keys on `townid` and adds the `county` / `township` name columns). Same
+algorithm, same options (`power` / `k_nearest` / `max_dist` / `pool_size` /
+`obs=`).
 
-1. **Average** the stations that fall inside the township (rainfall included —
-   a mean of the in-township gauges).
-2. If that cell is still empty — the township has no station of its own, or a
-   variable its own stations never report (e.g. pressure in a rain-gauge-only
-   district) — **fill** it by **inverse-distance weighting (IDW)** of the
-   `k_nearest` surrounding stations that *do* report it (within `max_dist`, if
-   set):
+For every *polygon × time step × variable* the value is the **pure
+inverse-distance-weighted (IDW)** mean of the `k_nearest` stations that report
+it:
 
 $$
 v \;=\; \frac{\sum_i w_i\,x_i}{\sum_i w_i}, \qquad w_i = \frac{1}{d_i^{\,\text{power}}}
 $$
 
-where $d_i$ is the great-circle distance from the township's representative
-point to station $i$. If no station reports the variable, the cell stays `NA`.
+where $d_i$ is the great-circle distance from the polygon's representative point
+to station $i$. Every variable — rainfall included — is interpolated; nothing is
+averaged over a polygon's own stations (a station sitting on the point is used
+directly, so nearby stations still dominate). If no station within range reports
+the variable, the cell is `NA`. Polygons sharing an `id_field` value are unioned
+and treated as one region.
 
-```mermaid
-flowchart TD
-    S["Download once:<br/>in-township stations + nearest pool (pool_size)"] --> C["For each cell:<br/>township × time step × variable"]
-    C --> Q1{"In-township station<br/>reports this variable?"}
-    Q1 -- yes --> AVG["Stage 1 — AVERAGE<br/>the in-township gauges<br/>(rainfall too)"]
-    AVG --> R1["value set<br/>used_fallback = FALSE"]
-    Q1 -- "no (gap)" --> Q2{"Pool station reports it,<br/>within max_dist?"}
-    Q2 -- yes --> IDW["Stage 2 — FILL by IDW of the k_nearest<br/>v = Σ wᵢ·xᵢ / Σ wᵢ ,  wᵢ = 1 / dᵢ^power"]
-    IDW --> R2["value set<br/>used_fallback = TRUE"]
-    Q2 -- no --> NA["stays NA"]
-```
-
-Only the in-township stations **plus a nearest pool** (`pool_size`) are
-downloaded — not every station in the country — so asking for a handful of
-townships is fast.
+The recommended flow is **two steps** — download once (section 3), then
+interpolate — so you can re-run with different polygons or settings without
+re-downloading:
 
 ```r
-# township boundaries as an sf layer. The default downloads the official NLSC
-# 鄉鎮市區界線(TWD97經緯度) shapefile from data.gov.tw (dataset 7441); zipped
-# shapefiles are unpacked automatically. Pass any sf-readable source to override.
-bnd <- load_tw_townships()                 # or load_tw_townships("twtowns.shp")
+# step 1 — download the measurement data once (see section 3)
+stations <- get_stations()
+obs <- get_weather(stations$station_id, "2024-01-01", "2024-01-07",
+                   type = "daily")
+# (optional) persist across R sessions:
+# saveRDS(list(stations = stations, obs = obs), "cwa_2024w1.rds")
+```
 
-# every township:
-tw_all <- get_township_weather(
-  start = "2024-01-01", end = "2024-01-07", type = "daily", boundaries = bnd
-)
+### Example A — Taiwan townships
 
-# just a couple of townships, selected by their townid codes:
+```r
+bnd <- load_tw_townships()          # official NLSC 鄉鎮市區界線 (data.gov.tw 7441)
+
+# step 2 — interpolate to every township (re-run freely, no re-download)
 tw <- get_township_weather(
   start = "2024-01-01", end = "2024-01-07", type = "daily",
-  boundaries = bnd,
-  townid     = c("66000040", "66000050"),   # omit to do every township
-  power      = 2,                            # IDW exponent (gap fill)
-  k_nearest  = 8,                            # nearest stations blended per gap
-  max_dist   = NULL,                         # optional cap in km
-  pool_size  = NULL                          # nearest pool to download; def max(30, 3*k)
+  boundaries = bnd, stations = stations, obs = obs,
+  power = 2, k_nearest = 8, max_dist = NULL
+)
+# townid = c("66000040", "66000050") restricts to a few districts.
+
+# the same thing via the general function (keyed on any column you choose):
+tw2 <- get_region_weather(
+  start = "2024-01-01", end = "2024-01-07", type = "daily",
+  shp = bnd, id_field = "townid",   # or "TOWNNAME", "COUNTYNAME", ...
+  stations = stations, obs = obs
 )
 ```
 
-Townships are keyed on **`townid`** — the official township code (`TOWNID` /
-`TOWNCODE`) carried through from the boundary layer. A single code is
-unambiguous, unlike district *names* which repeat across Taiwan (中山區 is in
-both 臺北市 and 基隆市). The boundary layer must therefore include a township-code
-column; `load_tw_townships()` keeps it for you.
+Output: `townid`, `county`, `township`, `obs_time`, one column per interpolated
+variable, and `n_stations` (nearby stations reporting at that step). `townid` is
+the unambiguous key — district *names* repeat across Taiwan (中山區 is in both
+臺北市 and 基隆市), so the wrapper keys on the code.
 
-Each requested township gets one row per time step (a **balanced, gap-free
-panel**). A cell is empty only when no station within the pool (and `max_dist`,
-if set) reports the variable at that time.
+### Example B — a 200 km² hexagonal grid (main island only)
 
-Output columns: `townid`, `county`, `township`, `obs_time`, one column per
-variable, `n_stations` (in-township stations feeding the row) and
-`used_fallback` (`TRUE` when any cell in the row was filled by IDW rather than
-averaged). The IDW power is stored in `attr(tw, "power")` and the in-township
-station ids in `attr(tw, "stations")`.
+Make your own polygons and pass them straight in:
+
+```r
+library(sf)
+
+# 1. main-island outline: drop the 外島 counties, union, project to metres
+bnd  <- load_tw_townships()
+main <- bnd[!bnd$county %in% c("澎湖縣", "金門縣", "連江縣"), ]
+main <- st_transform(st_union(st_make_valid(main)), 3826)   # TWD97 / TM2 (metres)
+
+# 2. ~200 km² regular hexagons: build, then rescale cellsize to hit the target
+mk  <- function(cs) st_sf(geometry = st_make_grid(main, cellsize = cs, square = FALSE))
+hex <- mk(15000)
+hex <- mk(15000 * sqrt(200e6 / as.numeric(median(st_area(hex)))))  # ≈ 200 km²
+
+# 3. keep only cells covering land, give each a stable id
+hex <- hex[lengths(st_intersects(hex, main)) > 0, ]
+hex$hex_id <- sprintf("H%04d", seq_len(nrow(hex)))
+
+# 4. interpolate (reuse the cached stations / obs from step 1)
+hw <- get_region_weather(
+  start = "2024-01-01", end = "2024-01-07", type = "daily",
+  shp = hex, id_field = "hex_id",
+  stations = stations, obs = obs
+)
+```
+
+Output: `region` (your `hex_id` values), `obs_time`, one column per interpolated
+variable, and `n_stations`. (`get_region_weather()` re-projects `shp` to lon/lat
+internally, so any CRS is fine.)
+
+### Notes & speed
+
+If you omit `obs` (and `stations`), the function downloads the nearest
+`pool_size` stations to each polygon for you — convenient for a one-off, but the
+two-step `obs=` flow is the fast path when you run repeatedly or cover many
+polygons. The interpolation itself is fast (vectorised matrix algebra); the cost
+is downloading and parsing the station CSVs, so:
+
+- **Faster parsing (automatic).** With the suggested [`data.table`](https://cran.r-project.org/package=data.table)
+  installed, CSV parsing uses `data.table::fread`; otherwise a base-R parser is
+  used. Just `install.packages("data.table")`.
+- **Download once, reuse via `obs=`.** Fetch `obs` once (optionally `saveRDS()`),
+  then call either function as many times as you like with `stations=`/`obs=` —
+  use the **same `stations`** table you built `obs` from so coordinates line up.
 
 > **monthly note** — for `type = "monthly"` the end date is automatically
 > extended to the end of its month, because the source returns a month's record
 > only once the window reaches the month end (a sub-month window comes back
 > empty — which previously surfaced as all-`NA`).
-
-You can also use the building blocks directly:
-
-```r
-st  <- get_stations()
-st  <- assign_township(st, bnd)            # adds township / county_geo / townid
-```
-
-### Speeding up many townships
-
-For a few townships the download is small. For **all ~368**, the nearest pools
-overlap so much that you end up downloading almost every station anyway, and the
-time goes into downloading and parsing those CSVs — not the interpolation. Two
-levers:
-
-- **Faster parsing (automatic).** If the suggested [`data.table`](https://cran.r-project.org/package=data.table)
-  package is installed, CSV parsing uses `data.table::fread` (much faster on the
-  wide feed); otherwise a base-R parser is used. Nothing to configure —
-  `install.packages("data.table")` and the first run is quicker.
-- **Download once, reuse via `obs=`.** Boundaries and historical observations
-  don't change, so fetch the data once, cache it, and pass it back. Subsequent
-  runs (different `townid` subsets, `power`, `k_nearest`, …) skip the network
-  entirely:
-
-  ```r
-  stations <- get_stations()
-  # one download covering every station you might need:
-  obs <- get_weather(stations$station_id, "2024-01-01", "2024-01-07",
-                     type = "daily")
-  saveRDS(list(stations = stations, obs = obs), "cwa_2024w1.rds")   # cache
-
-  # later / repeatedly — no download, runs in seconds:
-  cache <- readRDS("cwa_2024w1.rds")
-  tw <- get_township_weather(
-    start = "2024-01-01", end = "2024-01-07", type = "daily",
-    boundaries = bnd, stations = cache$stations, obs = cache$obs
-  )
-  ```
-
-  Pass the **same `stations`** table you built `obs` from so coordinates line
-  up. `get_region_weather()` takes `obs=` too.
-
-## 5. Your own shapefile
-
-**The algorithm is exactly the same as section 4** (average inside each region,
-then IDW-fill the gaps — diagram and formula above apply unchanged). The only
-differences are *what you aggregate to* and *how regions are keyed*:
-
-| | section 4 `get_township_weather()` | section 5 `get_region_weather()` |
-|---|---|---|
-| polygons | official township layer (`boundaries`) | **your own** `sf` / shapefile (`shp`) |
-| region key | `townid` (built in) | a column **you name** via `id_field` |
-| output key column | `townid` + `county` + `township` | `region` (your `id_field` values) |
-
-So `get_region_weather()` is just `get_township_weather()` pointed at arbitrary
-polygons: you supply the geometry (`shp`) and tell it which attribute column
-labels each polygon (`id_field`). Everything downstream — average, gap-fill,
-`power` / `k_nearest` / `max_dist` / `pool_size`, the balanced panel — is
-identical.
-
-```r
-rw <- get_region_weather(
-  start = "2024-01-01", end = "2024-01-07", type = "daily",
-  shp      = "my_regions.shp",   # or an sf object you already loaded
-  id_field = "site_name",        # the column that names each region
-  regions  = NULL,               # optional subset of id_field values to keep
-  power = 2, k_nearest = 8, max_dist = NULL, pool_size = NULL
-)
-```
-
-Output columns: `region` (your `id_field` values), `obs_time`, one column per
-variable, `n_stations` and `used_fallback`. Polygons that share an `id_field`
-value are unioned and treated as a single region.
 
 ## Notes
 
