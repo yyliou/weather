@@ -82,8 +82,7 @@ plot_station_panel(start = "1990-01-01", end = "2024-12-31", by = "year")
 ```r
 st  <- get_stations(active_only = FALSE)
 tp  <- st[st$county == "臺北市", ]
-plot_station_panel(tp, start = "2000-01-01", end = "2024-12-31", by = "month",
-                   sort = "succession")
+plot_station_panel(tp, start = "2000-01-01", end = "2024-12-31", by = "month")
 ```
 
 ![Station operating-status panel for Taipei](man/figures/station-panel.png)
