@@ -9,10 +9,12 @@ The package gives you these functions:
 | Function | Purpose |
 |---|---|
 | `get_stations()` | 測站基本資料 — station metadata (id, name, lon/lat, county) |
-| `station_panel()` / `plot_station_panel()` | 營運狀態面板 — panelview-style station operating-status panel (Not yet established / Operating / Decommissioned) over a time window |
 | `get_weather()` | 測量資料 — station observation time series (hourly / daily / monthly) |
-| `get_township_weather()` | 內插到鄉鎮 — interpolate weather to township level by inverse-distance weighting (keyed on townid) |
-| `get_region_weather()` | 內插到自訂區域 — interpolate weather over your own shapefile, keyed by one id column |
+| `get_region_weather()` | 內插到任意多邊形 — interpolate weather to **any polygons you supply** (inverse-distance weighting), keyed by one id column |
+| `get_township_weather()` | 內插到鄉鎮 — convenience wrapper of `get_region_weather()` for the official township layer (keyed on `townid`) |
+| `load_tw_townships()` | 鄉鎮界線 — download / read the official NLSC township boundary layer as an `sf` object |
+| `assign_township()` | 測站歸屬鄉鎮 — tag each station with the township polygon it falls in |
+| `station_panel()` / `plot_station_panel()` | 營運狀態面板 — panelview-style station operating-status panel (Not yet established / Operating / Decommissioned) over a time window |
 
 ## Install
 
@@ -250,3 +252,30 @@ is downloading and parsing the station CSVs, so:
 ## License
 
 MIT
+
+## References
+
+If you use this package, please cite it together with the underlying data
+sources (APA 7th edition):
+
+- Liou, Y. (2026). *twweather: Download Taiwan CWA historical weather
+  observations* (Version 0.1.0) [Computer software].
+  https://github.com/yyliou/weather
+
+- Central Weather Administration. (n.d.). *Observation Data Inquire System
+  (CODiS)* [Data set]. Retrieved June 9, 2026, from https://codis.cwa.gov.tw/
+
+- National Land Surveying and Mapping Center. (n.d.). *鄉鎮市區界線
+  (TWD97經緯度) [Township and district administrative boundaries]* [Data set].
+  政府資料開放平臺 (data.gov.tw). https://data.gov.tw/dataset/7441
+
+- Raingel. (n.d.). *Taiwan historical meteorological observations database*
+  [Computer software]. GitHub. https://github.com/Raingel/historical_weather
+
+- Mou, H., Liu, L., & Xu, Y. (2023). Panel data visualization in R (panelView)
+  and Stata (panelview). *Journal of Statistical Software, 107*(7), 1–20.
+  https://doi.org/10.18637/jss.v107.i07
+
+- Pebesma, E. (2018). Simple features for R: Standardized support for spatial
+  vector data. *The R Journal, 10*(1), 439–446.
+  https://doi.org/10.32614/RJ-2018-009
