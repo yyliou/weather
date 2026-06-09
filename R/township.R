@@ -84,7 +84,11 @@ load_tw_townships <- function(source = NULL,
   shp_exts <- "\\.(shp|shx|dbf|prj|cpg|sbn|sbx|qix|fix|aih|ain|atx|qpj)$"
   entries <- tryCatch(utils::unzip(local_zip, list = TRUE)$Name,
                       error = function(e) character(0))
-  wanted <- entries[grepl(shp_exts, entries, ignore.case = TRUE)]
+  # Match on raw bytes: the bundled .xlsx has an invalid-in-UTF-8 Big5 name that
+  # would otherwise trigger "unable to translate to a wide string" warnings (and
+  # an NA in the match vector). ASCII shapefile extensions still match fine.
+  hit <- grepl(shp_exts, entries, ignore.case = TRUE, useBytes = TRUE)
+  wanted <- entries[!is.na(hit) & hit]
   if (length(wanted)) {
     utils::unzip(local_zip, files = wanted, exdir = exdir)
   } else {
