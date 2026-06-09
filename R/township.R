@@ -73,7 +73,24 @@ load_tw_townships <- function(source = NULL,
   }
   exdir <- tempfile("tww_shp_")
   dir.create(exdir)
-  utils::unzip(local_zip, exdir = exdir)
+
+  # The official NLSC zip bundles a Big5/CP950-named .xlsx ("清冊") alongside the
+  # shapefile. R's internal unzip writes entry names as raw bytes, so on UTF-8
+  # filesystems (macOS APFS, modern Linux) creating that file fails with
+  # "Illegal byte sequence", aborting the whole extraction before the .shp is
+  # reached. Extract only the shapefile's component files (which carry plain
+  # ASCII names) and skip everything else, so the offending entry is never
+  # touched. Fall back to a full extraction if no obvious shp parts are listed.
+  shp_exts <- "\\.(shp|shx|dbf|prj|cpg|sbn|sbx|qix|fix|aih|ain|atx|qpj)$"
+  entries <- tryCatch(utils::unzip(local_zip, list = TRUE)$Name,
+                      error = function(e) character(0))
+  wanted <- entries[grepl(shp_exts, entries, ignore.case = TRUE)]
+  if (length(wanted)) {
+    utils::unzip(local_zip, files = wanted, exdir = exdir)
+  } else {
+    utils::unzip(local_zip, exdir = exdir)
+  }
+
   shp <- list.files(exdir, pattern = "\\.shp$", full.names = TRUE,
                     recursive = TRUE)
   if (length(shp) == 0L) {
