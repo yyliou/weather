@@ -10,7 +10,9 @@ Description: A thin wrapper around the NCHU "CWB Historical Weather Data
     measurement time series (hourly / daily / monthly), and an
     aggregation of station data up to the township (鄉鎮) level by
     reverse-geocoding each station's longitude/latitude into township
-    polygons (rainfall summed, other variables averaged).
+    polygons (rainfall summed, other variables averaged). Also builds a
+    'panelview'-style station operating-status panel (not yet set up /
+    operating / decommissioned) over a chosen time window.
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
@@ -22,5 +24,6 @@ Imports:
     jsonlite
 Suggests:
     sf,
+    ggplot2,
     testthat (>= 3.0.0)
 URL: https://mycolab.pp.nchu.edu.tw/historical_weather/index.php

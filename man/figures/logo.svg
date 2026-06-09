@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 173 200" role="img" aria-label="twweather package hex badge">
+  <!-- hexagon -->
+  <path d="M86.5 2 L171 50.5 V149.5 L86.5 198 L2 149.5 V50.5 Z" fill="#3a82c4" stroke="#27598c" stroke-width="4" stroke-linejoin="round"/>
+  <!-- inner border -->
+  <path d="M86.5 2 L171 50.5 V149.5 L86.5 198 L2 149.5 V50.5 Z" fill="none" stroke="#cfe6f7" stroke-width="1.5" stroke-linejoin="round" opacity="0.55" transform="translate(86.5,100) scale(0.92) translate(-86.5,-100)"/>
+  <!-- motif: single colour (white) cloud with rain, centred -->
+  <g fill="#ffffff">
+    <!-- cloud -->
+    <circle cx="86.5" cy="66" r="20"/>
+    <circle cx="65" cy="76" r="14"/>
+    <circle cx="108" cy="76" r="13"/>
+    <rect x="65" y="76" width="43" height="17" rx="8"/>
+  </g>
+  <!-- rain -->
+  <g stroke="#ffffff" stroke-width="4" stroke-linecap="round">
+    <line x1="72" y1="100" x2="68" y2="111"/>
+    <line x1="88" y1="100" x2="84" y2="111"/>
+    <line x1="104" y1="100" x2="100" y2="111"/>
+  </g>
+  <!-- name -->
+  <text x="86.5" y="148" text-anchor="middle" font-family="Palatino, 'Palatino Linotype', 'Book Antiqua', Georgia, serif" font-weight="bold" font-size="21" fill="#ffffff">twweather</text>
+</svg>

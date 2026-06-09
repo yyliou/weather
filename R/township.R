@@ -222,13 +222,31 @@ assign_township <- function(stations, boundaries) {
 #' all other numeric variables are **averaged** (this default matches common
 #' meteorological practice and your stated preference).
 #'
+#' Townships are identified by **county + township together** (`county` +
+#' `townships`), because district names are not unique across Taiwan — e.g.
+#' 中山區 exists in both 臺北市 and 基隆市, and 西區 in 臺中市, 嘉義市 and
+#' 臺南市. The traditional/simplified 臺/台 forms are treated as equal.
+#'
+#' When a township has **no valid value** for a given time step and variable —
+#' either because no station falls inside its polygon, or because every
+#' in-township station reports `NA` there — the value is filled from the
+#' `k_nearest` stations closest to that township's centroid (the "question two"
+#' fallback). This guarantees one row per requested township per time step,
+#' even for districts that contain no station of their own.
+#'
 #' @param start,end,type Passed to [get_weather()].
 #' @param boundaries Township boundaries: an \pkg{sf} object from
 #'   [load_tw_townships()], or a path/URL it can read. Required for the
 #'   coordinate-based lookup.
-#' @param townships Optional character vector of township names to keep
-#'   (e.g. `c("北屯區", "信義區")`). `NULL` aggregates every township that has
+#' @param county Single county/city name the `townships` belong to
+#'   (e.g. `"臺中市"`). `NULL` matches `townships` on district name alone across
+#'   every county (kept for convenience, but ambiguous for non-unique names).
+#' @param townships Optional character vector of district names to keep
+#'   (e.g. `c("北屯區", "西屯區")`). `NULL` aggregates every township that has
 #'   at least one station.
+#' @param k_nearest Number of nearest stations (by distance to the township
+#'   centroid) used to fill time steps/variables that have no valid in-township
+#'   value. Default `3`.
 #' @param stations Optional pre-fetched station table (from [get_stations()]).
 #'   If `NULL`, it is downloaded.
 #' @param rain_pattern Regex identifying rainfall columns to sum. Default
@@ -238,23 +256,27 @@ assign_township <- function(stations, boundaries) {
 #' @param clean,na_codes,quiet Passed to [get_weather()].
 #'
 #' @return A data frame with `county`, `township`, `obs_time`, one column per
-#'   aggregated variable, and `n_stations` (number of stations contributing to
-#'   each township/time row). The ids of the contributing stations are kept in
-#'   the `stations` attribute.
+#'   aggregated variable, `n_stations` (number of in-township stations
+#'   contributing to that row) and `used_fallback` (`TRUE` when at least one
+#'   variable in the row was filled from the nearest-station pool). The ids of
+#'   the in-township stations are kept in the `stations` attribute.
 #'
 #' @examples
 #' \dontrun{
 #' bnd <- load_tw_townships()                      # or a local shapefile
 #' tw  <- get_township_weather(
 #'   start = "2024-01-01", end = "2024-01-07", type = "daily",
-#'   boundaries = bnd, townships = c("北屯區", "西屯區")
+#'   boundaries = bnd, county = "臺中市",
+#'   townships = c("北屯區", "西屯區")
 #' )
 #' }
 #' @export
 get_township_weather <- function(start, end,
                                  type = c("hourly", "daily", "monthly"),
                                  boundaries,
+                                 county = NULL,
                                  townships = NULL,
+                                 k_nearest = 3,
                                  stations = NULL,
                                  rain_pattern = "降水|雨量|precip|rain",
                                  agg_fun = list(),
@@ -268,35 +290,212 @@ get_township_weather <- function(start, end,
          "Use load_tw_townships() or pass a shapefile/GeoJSON path.",
          call. = FALSE)
   }
+  # standardise once so we can both reverse-geocode and read region centroids
+  if (!inherits(boundaries, "sf")) {
+    boundaries <- load_tw_townships(source = boundaries)
+  } else {
+    boundaries <- .tww_standardise_boundaries(boundaries, NULL, NULL)
+  }
 
   if (is.null(stations)) stations <- get_stations()
   stations <- assign_township(stations, boundaries)
 
-  # keep stations that landed in a township (optionally only requested ones)
-  keep <- !is.na(stations$township)
-  if (!is.null(townships)) keep <- keep & stations$township %in% townships
-  stations <- stations[keep, , drop = FALSE]
-  if (nrow(stations) == 0L) {
-    stop("No stations fall inside the requested township(s).", call. = FALSE)
+  # which (county, township) regions must we return one row per time step for?
+  regions <- .tww_target_regions(boundaries, stations, county, townships)
+  if (nrow(regions) == 0L) {
+    stop("No matching township(s) for the requested county/townships.",
+         call. = FALSE)
   }
+  # attach in-township station ids and the nearest-k fallback pool per region
+  regions <- .tww_attach_station_pools(regions, boundaries, stations, k_nearest)
 
-  obs <- get_weather(stations$station_id, start, end, type = type,
+  # download once for every station we might use (in-township + fallback pools)
+  need_ids <- unique(unlist(c(regions$in_ids, regions$near_ids)))
+  need_ids <- need_ids[!is.na(need_ids) & nzchar(need_ids)]
+  if (length(need_ids) == 0L) {
+    stop("No stations available for the requested township(s).", call. = FALSE)
+  }
+  obs <- get_weather(need_ids, start, end, type = type,
                      clean = clean, na_codes = na_codes, quiet = quiet)
 
-  # attach township / county to every observation row
-  m <- match(obs$station_id, stations$station_id)
-  obs$township <- stations$township[m]
-  obs$county   <- stations$county_geo[m]
-  # fall back to metadata county where geo-county is missing
-  if (all(is.na(obs$county)) && "county" %in% names(stations)) {
-    obs$county <- stations$county[m]
-  }
-  if (is.null(obs$county)) obs$county <- NA_character_
-  obs$county[is.na(obs$county)] <- ""
+  out <- .tww_aggregate_regions(obs, regions, rain_pattern, agg_fun)
 
-  out <- .tww_aggregate_township(obs, rain_pattern, agg_fun)
-  attr(out, "stations") <- stats::setNames(stations$station_id, stations$name)
+  used <- unique(unlist(regions$in_ids))
+  used <- used[!is.na(used) & nzchar(used)]
+  attr(out, "stations") <-
+    stats::setNames(used, stations$name[match(used, stations$station_id)])
   attr(out, "type") <- type
+  out
+}
+
+# Normalise a Chinese place name for matching: fold 台 -> 臺 and trim. This lets
+# users type either form (台中市 / 臺中市) and still hit the official boundary
+# names, which use 臺.
+.tww_norm_name <- function(x) {
+  x <- as.character(x)
+  x[is.na(x)] <- NA_character_
+  trimws(gsub("台", "臺", x))   # 台 -> 臺
+}
+
+# Resolve the set of (county, township) regions to return, using the canonical
+# display names from the boundary layer. With `townships = NULL` we take every
+# (county, township) that has at least one assigned station (optionally limited
+# to `county`); otherwise we look each requested district up in the boundaries.
+.tww_target_regions <- function(boundaries, stations, county, townships) {
+  bnd <- data.frame(
+    county_n      = .tww_norm_name(boundaries$county),
+    township_n    = .tww_norm_name(boundaries$township),
+    county_disp   = as.character(boundaries$county),
+    township_disp = as.character(boundaries$township),
+    stringsAsFactors = FALSE
+  )
+  bnd <- unique(bnd[!is.na(bnd$township_n) & nzchar(bnd$township_n), ,
+                    drop = FALSE])
+  cty_n <- if (!is.null(county)) .tww_norm_name(county)[1] else NULL
+
+  if (is.null(townships)) {
+    df <- data.frame(county_n   = .tww_norm_name(stations$county_geo),
+                     township_n = .tww_norm_name(stations$township),
+                     stringsAsFactors = FALSE)
+    df <- df[!is.na(df$township_n) & nzchar(df$township_n), , drop = FALSE]
+    if (!is.null(cty_n)) df <- df[df$county_n %in% cty_n, , drop = FALSE]
+    df <- unique(df)
+    if (nrow(df) == 0L) {
+      return(data.frame(county = character(0), township = character(0),
+                        stringsAsFactors = FALSE))
+    }
+    m <- match(paste(df$county_n, df$township_n, sep = "\r"),
+               paste(bnd$county_n, bnd$township_n, sep = "\r"))
+    return(unique(data.frame(
+      county   = ifelse(is.na(m), df$county_n,   bnd$county_disp[m]),
+      township = ifelse(is.na(m), df$township_n, bnd$township_disp[m]),
+      stringsAsFactors = FALSE)))
+  }
+
+  tship_n <- .tww_norm_name(townships)
+  parts <- lapply(tship_n, function(t) {
+    hit <- bnd[bnd$township_n == t, , drop = FALSE]
+    if (!is.null(cty_n)) hit <- hit[hit$county_n == cty_n, , drop = FALSE]
+    if (nrow(hit) == 0L) {
+      warning("Township not found in boundaries: ",
+              if (!is.null(county)) paste0(county, " "), t, call. = FALSE)
+      return(NULL)
+    }
+    unique(data.frame(county = hit$county_disp, township = hit$township_disp,
+                      stringsAsFactors = FALSE))
+  })
+  out <- do.call(rbind, parts)
+  if (is.null(out)) {
+    return(data.frame(county = character(0), township = character(0),
+                      stringsAsFactors = FALSE))
+  }
+  unique(out)
+}
+
+# For each region attach: `in_ids` (stations whose assigned county+township
+# match the region) and `near_ids` (the k stations nearest the region's
+# centroid, used as the missing-value fallback).
+.tww_attach_station_pools <- function(regions, boundaries, stations, k) {
+  k <- max(1L, as.integer(k))
+  has_xy <- !is.na(stations$lon) & !is.na(stations$lat)
+  spts <- if (any(has_xy)) {
+    sf::st_as_sf(stations[has_xy, , drop = FALSE],
+                 coords = c("lon", "lat"), crs = 4326, remove = FALSE)
+  } else {
+    NULL
+  }
+
+  bc <- .tww_norm_name(boundaries$county)
+  bt <- .tww_norm_name(boundaries$township)
+  st_cty  <- .tww_norm_name(stations$county_geo)
+  st_town <- .tww_norm_name(stations$township)
+
+  in_ids   <- vector("list", nrow(regions))
+  near_ids <- vector("list", nrow(regions))
+  for (i in seq_len(nrow(regions))) {
+    rc <- .tww_norm_name(regions$county[i])
+    rt <- .tww_norm_name(regions$township[i])
+    cty_free <- is.na(rc) || !nzchar(rc)
+
+    sel_in <- !is.na(st_town) & st_town == rt &
+      (cty_free | (!is.na(st_cty) & st_cty == rc))
+    in_ids[[i]] <- stations$station_id[sel_in]
+
+    near_ids[[i]] <- character(0)
+    sel_b <- !is.na(bt) & bt == rt & (cty_free | (!is.na(bc) & bc == rc))
+    if (any(sel_b) && !is.null(spts)) {
+      poly <- suppressWarnings(
+        sf::st_union(sf::st_geometry(boundaries[sel_b, , drop = FALSE])))
+      cen  <- suppressWarnings(sf::st_centroid(poly))
+      d    <- suppressWarnings(as.numeric(sf::st_distance(cen, spts)))
+      near_ids[[i]] <- spts$station_id[utils::head(order(d), k)]
+    }
+  }
+  regions$in_ids   <- in_ids
+  regions$near_ids <- near_ids
+  regions
+}
+
+# Aggregate observations to one row per region per time step. Within a cell
+# (region x obs_time x variable) the in-township stations are reduced first
+# (rain summed, the rest averaged); if that yields no valid value the nearest-k
+# pool is used instead and `used_fallback` is flagged.
+.tww_aggregate_regions <- function(obs, regions, rain_pattern, agg_fun) {
+  meta_cols  <- c("station_id", "obs_time")
+  value_cols <- setdiff(names(obs), meta_cols)
+  num_cols   <- value_cols[vapply(obs[value_cols], is.numeric, logical(1))]
+  if (length(num_cols) == 0L) {
+    stop("No numeric value columns to aggregate.", call. = FALSE)
+  }
+  is_rain <- grepl(rain_pattern, num_cols, ignore.case = TRUE)
+  fun_for <- function(col) {
+    if (!is.null(agg_fun[[col]])) return(match.fun(agg_fun[[col]]))
+    if (is_rain[match(col, num_cols)]) sum else mean
+  }
+  reduce_cell <- function(rows, col) {
+    if (length(rows) == 0L) return(NA_real_)
+    r <- suppressWarnings(fun_for(col)(obs[[col]][rows], na.rm = TRUE))
+    if (length(r) != 1L || is.na(r) || is.nan(r) || is.infinite(r)) {
+      NA_real_
+    } else {
+      r
+    }
+  }
+
+  times <- unique(obs$obs_time)
+  rows  <- list()
+  for (i in seq_len(nrow(regions))) {
+    in_ids   <- regions$in_ids[[i]]
+    near_ids <- regions$near_ids[[i]]
+    for (tv in times) {
+      at_t <- !is.na(obs$obs_time) & obs$obs_time == tv
+      in_rows   <- which(at_t & obs$station_id %in% in_ids)
+      near_rows <- which(at_t & obs$station_id %in% near_ids)
+
+      vals <- vector("list", length(num_cols)); names(vals) <- num_cols
+      fb <- FALSE
+      for (col in num_cols) {
+        v <- reduce_cell(in_rows, col)
+        if (is.na(v)) {
+          v <- reduce_cell(near_rows, col)
+          if (!is.na(v)) fb <- TRUE
+        }
+        vals[[col]] <- v
+      }
+      cols <- c(
+        list(county = regions$county[i], township = regions$township[i],
+             obs_time = tv),
+        vals,
+        list(n_stations = length(unique(obs$station_id[in_rows])),
+             used_fallback = fb))
+      rows[[length(rows) + 1L]] <-
+        do.call(data.frame,
+                c(cols, list(check.names = FALSE, stringsAsFactors = FALSE)))
+    }
+  }
+  out <- do.call(rbind, rows)
+  out <- out[order(out$county, out$township, out$obs_time), , drop = FALSE]
+  rownames(out) <- NULL
   out
 }
 
