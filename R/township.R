@@ -103,16 +103,23 @@ load_tw_townships <- function(source = NULL,
   sf::st_read(.tww_pick_township_shp(shp), quiet = TRUE)
 }
 
-# A zip can hold more than one shapefile (the NLSC bundle ships the island-wide
-# township layer "TOWN_MOI_*.shp" plus per-area extras such as "majia.shp").
-# Prefer the layer whose name starts with "town"; otherwise fall back to the
-# first one alphabetically.
+# A zip can hold more than one shapefile: the NLSC bundle ships the island-wide
+# township layer "TOWN_MOI_<date>.shp" alongside partial extras such as
+# "Town_Majia_Sanhe.shp" (both start with "town", so a name prefix isn't enough).
+# Prefer the official "TOWN_MOI_*" layer; if that's absent, fall back to whichever
+# layer has the most features (the full township layer has ~368, far more than a
+# partial extra), and only then to the first file alphabetically.
 .tww_pick_township_shp <- function(shp) {
   if (length(shp) == 1L) return(shp)
   base <- tolower(basename(shp))
-  town <- shp[grepl("^town", base)]
-  if (length(town)) return(town[1])
-  shp[1]
+  moi <- shp[grepl("^town_moi", base)]
+  if (length(moi)) return(moi[1])
+  counts <- vapply(shp, function(s) {
+    n <- tryCatch(sum(sf::st_layers(s)$features, na.rm = TRUE),
+                  error = function(e) NA_real_)
+    if (is.na(n)) -1 else n
+  }, numeric(1))
+  if (any(counts >= 0)) shp[which.max(counts)] else shp[1]
 }
 
 .tww_standardise_boundaries <- function(poly, town_field, county_field) {
