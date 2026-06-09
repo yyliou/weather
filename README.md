@@ -117,21 +117,27 @@ wd <- get_weather(c("466920", "466930"), "2024-01-01", "2024-01-31", type = "dai
   missing-value sentinels (e.g. `-99.8`, `-9999`, and literal text like `"NA"` /
   `"--"`) become `NA`.
 
-## 4. Township interpolation
+## 4. Township values (average, then fill gaps)
 
-Every station is downloaded **once**, then each township's value is estimated by
-spatially interpolating the surrounding stations. For each township, time step
-and variable the value is the **inverse-distance-weighted (IDW)** mean of the
-`k_nearest` stations that report that variable:
+Two stages:
 
-```
-v = Σ wᵢ·xᵢ / Σ wᵢ ,   wᵢ = 1 / dᵢ^power
-```
+1. **Average** the stations that fall inside each township (rainfall included —
+   a mean of the in-township gauges) for every time step and variable.
+2. **Fill** only the cells still missing — a township with no station of its
+   own, or a variable its own stations never report (e.g. pressure in a
+   rain-gauge-only district) — by **inverse-distance weighting (IDW)** of the
+   `k_nearest` surrounding stations that do report it:
 
-where `dᵢ` is the great-circle distance from the township's representative point
-to station *i*. **Every variable — rainfall included — is interpolated this
-way** (the result estimates local conditions at the township, it is not a sum
-over its stations).
+   ```
+   v = Σ wᵢ·xᵢ / Σ wᵢ ,   wᵢ = 1 / dᵢ^power
+   ```
+
+   where `dᵢ` is the great-circle distance from the township's representative
+   point to station *i*.
+
+Only the in-township stations **plus a nearest pool** (`pool_size`) are
+downloaded — not every station in the country — so asking for a handful of
+townships is fast.
 
 ```r
 # township boundaries as an sf layer. The default downloads the official NLSC
@@ -149,9 +155,10 @@ tw <- get_township_weather(
   start = "2024-01-01", end = "2024-01-07", type = "daily",
   boundaries = bnd,
   townid     = c("66000040", "66000050"),   # omit to do every township
-  power      = 2,                            # IDW distance exponent
-  k_nearest  = 8,                            # nearest stations blended per cell
-  max_dist   = NULL                          # optional cap in km
+  power      = 2,                            # IDW exponent (gap fill)
+  k_nearest  = 8,                            # nearest stations blended per gap
+  max_dist   = NULL,                         # optional cap in km
+  pool_size  = NULL                          # nearest pool to download; def max(30, 3*k)
 )
 ```
 
@@ -162,16 +169,14 @@ both 臺北市 and 基隆市). The boundary layer must therefore include a towns
 column; `load_tw_townships()` keeps it for you.
 
 Each requested township gets one row per time step (a **balanced, gap-free
-panel**). Because the value is drawn from the nearest stations that actually
-have data — skipping any that are `NA` at that step — a cell is empty only when
-*no* station reports the variable at that time, even for districts with no
-station of their own. `max_dist` (kilometres) optionally caps how far a
-contributing station may be.
+panel**). A cell is empty only when no station within the pool (and `max_dist`,
+if set) reports the variable at that time.
 
 Output columns: `townid`, `county`, `township`, `obs_time`, one column per
-interpolated variable, and `n_stations` (nearby stations reporting at that time
-step). The IDW power is stored in `attr(tw, "power")` and the source station ids
-in `attr(tw, "stations")`.
+variable, `n_stations` (in-township stations feeding the row) and
+`used_fallback` (`TRUE` when any cell in the row was filled by IDW rather than
+averaged). The IDW power is stored in `attr(tw, "power")` and the in-township
+station ids in `attr(tw, "stations")`.
 
 > **monthly note** — for `type = "monthly"` the end date is automatically
 > extended to the end of its month, because the source returns a month's record
@@ -185,14 +190,14 @@ st  <- get_stations()
 st  <- assign_township(st, bnd)            # adds township / county_geo / townid
 ```
 
-## 5. Interpolation over your own shapefile
+## 5. Your own shapefile
 
 `get_region_weather()` is the general-purpose sibling of
 `get_township_weather()`: instead of the official township layer, you supply
 **your own** polygons (an `sf` object, or a path/URL to a shapefile / GeoPackage
 / GeoJSON / zipped shapefile) and name the column that identifies each region.
-The same IDW interpolation (rainfall included) is applied to each region's
-representative point.
+The same average-then-fill logic (rainfall included) applies — in-region
+stations are averaged, remaining gaps are IDW-filled from a nearby pool.
 
 ```r
 rw <- get_region_weather(
@@ -200,13 +205,13 @@ rw <- get_region_weather(
   shp      = "my_regions.shp",   # or an sf object you already loaded
   id_field = "site_name",        # the column that names each region
   regions  = NULL,               # optional subset of id_field values to keep
-  power = 2, k_nearest = 8, max_dist = NULL
+  power = 2, k_nearest = 8, max_dist = NULL, pool_size = NULL
 )
 ```
 
 Output columns: `region` (your `id_field` values), `obs_time`, one column per
-interpolated variable, and `n_stations`. Polygons that share an `id_field` value
-are unioned and treated as a single region.
+variable, `n_stations` and `used_fallback`. Polygons that share an `id_field`
+value are unioned and treated as a single region.
 
 ## Notes
 
