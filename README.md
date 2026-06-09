@@ -249,16 +249,12 @@ is downloading and parsing the station CSVs, so:
 - Data source & terms: CWA CODiS via
   <https://mycolab.pp.nchu.edu.tw/historical_weather/>.
 
-## License
-
-MIT
-
 ## References
 
 If you use this package, please cite it together with the underlying data
 sources (APA 7th edition):
 
-- Liou, Y. (2026). *twweather: Download Taiwan CWA historical weather
+- Liou, Yu-You. (2026). *twweather: Download Taiwan CWA historical weather
   observations* (Version 0.1.0) [Computer software].
   https://github.com/yyliou/weather
 
