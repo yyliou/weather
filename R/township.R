@@ -637,6 +637,16 @@ get_region_weather <- function(start, end,
       r
     }
   }
+  # Guard the row assembly: every value handed to data.frame() must be exactly
+  # length 1, otherwise data.frame() aborts with "arguments imply differing
+  # number of rows" (a length-0 cell -> "1, 0"). reduce_cell()/reduce_fallback()
+  # already aim for scalars, but a degenerate column or an unmatched id label can
+  # still surface an empty value; coerce anything non-scalar to a single value.
+  scalar1 <- function(x) {
+    if (is.null(x) || length(x) == 0L) return(NA)
+    if (length(x) > 1L) return(x[[1L]])
+    x
+  }
   # Reduce all in-region rows for a column.
   reduce_cell <- function(rows, col) {
     if (length(rows) == 0L) return(NA_real_)
@@ -682,11 +692,11 @@ get_region_weather <- function(start, end,
         vals[[col]] <- v
       }
       cols <- c(
-        id_vals,
-        list(obs_time = tv),
-        vals,
-        list(n_stations = length(unique(obs$station_id[in_rows])),
-             used_fallback = fb))
+        lapply(id_vals, scalar1),
+        list(obs_time = scalar1(tv)),
+        lapply(vals, scalar1),
+        list(n_stations = as.integer(length(unique(obs$station_id[in_rows]))),
+             used_fallback = isTRUE(fb)))
       rows[[length(rows) + 1L]] <-
         do.call(data.frame,
                 c(cols, list(check.names = FALSE, stringsAsFactors = FALSE)))
