@@ -80,12 +80,26 @@ get_weather <- function(station_id,
       .tww_read_zip(path, cids, na_codes, clean)
     } else {
       df <- .tww_read_csv(path, na_codes, clean)
+      if (nrow(df) == 0L) return(data.frame())   # no data in window -> skip
       id <- if (length(cids) == 1L) cids else NA_character_
       cbind(station_id = id, df, stringsAsFactors = FALSE)
     }
   }
 
   out <- .tww_rbind_fill(lapply(chunks, fetch_chunk))
+
+  # Stations with no data in the requested window (e.g. decommissioned ones) are
+  # quietly dropped above rather than aborting the whole request; report which.
+  got <- if (nrow(out)) unique(as.character(out$station_id)) else character(0)
+  missing_ids <- setdiff(ids, got)
+  if (length(missing_ids) && length(ids) > 1L && !isTRUE(quiet)) {
+    message("No data in window for station(s), skipped: ",
+            paste(missing_ids, collapse = ", "))
+  }
+  if (nrow(out) == 0L) {
+    warning("No data returned for any requested station in this window.",
+            call. = FALSE)
+  }
 
   attr(out, "type")  <- type
   # Store the window as Date objects so the format is consistent across the
@@ -109,6 +123,7 @@ get_weather <- function(station_id,
 
   parts <- lapply(files, function(f) {
     df <- .tww_read_csv(f, na_codes, clean)
+    if (nrow(df) == 0L) return(NULL)   # station had no data in window -> skip
     cbind(station_id = .tww_id_from_name(f), df, stringsAsFactors = FALSE)
   })
 

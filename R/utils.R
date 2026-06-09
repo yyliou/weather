@@ -132,22 +132,47 @@
     identical(magic[1:2], as.raw(c(0x50, 0x4B)))   # "PK"
 }
 
-# Read one CWA CSV file (UTF-8 with BOM) into a data.frame, cleaning sentinels.
+# Read one CWA observation CSV into a data.frame, tolerantly, cleaning sentinels.
+#
+# The feed has quirks that make base read.csv() abort with "arguments imply
+# differing number of rows": a UTF-8 BOM, CRLF endings, blank trailing lines,
+# and—crucially—when a station has no data in the requested window (e.g. a
+# decommissioned station such as 466880 板橋, retired 2022-12-31) the server
+# returns a short plain-text notice ("No data available ...") instead of a CSV.
+# We read raw lines, detect those non-CSV responses (returning an empty frame so
+# the station is simply dropped from the combined result), and otherwise split
+# into a rectangular frame ourselves so a ragged row can never crash the parse.
 .tww_read_csv <- function(path, na_codes, clean) {
-  df <- utils::read.csv(
-    path,
-    header = TRUE,
-    check.names = FALSE,
-    stringsAsFactors = FALSE,
-    fileEncoding = "UTF-8-BOM",
-    na.strings = c("", "NA")
-  )
+  txt <- tryCatch(readLines(path, warn = FALSE, encoding = "UTF-8"),
+                  error = function(e) character(0))
+  if (length(txt)) txt[1L] <- sub("^\uFEFF", "", txt[1L])   # strip BOM
+  txt <- sub("\r$", "", txt)                                # CRLF -> LF
+  txt <- txt[nzchar(trimws(txt))]                           # drop blank lines
+
+  # Not a usable data CSV (empty, single line, or a "no data"/查無資料 notice).
+  if (length(txt) < 2L || !grepl(",", txt[1L]) ||
+      any(grepl("no data|查無|無資料", txt, ignore.case = TRUE))) {
+    return(data.frame())
+  }
+
+  header <- trimws(strsplit(txt[1L], ",", fixed = TRUE)[[1L]])
+  nc     <- length(header)
+  body   <- strsplit(txt[-1L], ",", fixed = TRUE)
+  body   <- lapply(body, function(r) { length(r) <- nc; r })  # pad/truncate
+  mat    <- matrix(unlist(body, use.names = FALSE), ncol = nc, byrow = TRUE)
+  df     <- as.data.frame(mat, stringsAsFactors = FALSE, check.names = FALSE)
+  names(df) <- header
+  df[] <- lapply(df, function(v) {
+    v <- trimws(v)
+    v <- sub('^"(.*)"$', "\\1", v)   # strip any stray surrounding quotes
+    v[v == ""] <- NA
+    v
+  })
+
   # The first column is the observation time; rename it to `obs_time` and put it
   # in a consistent ISO (YYYY-MM-DD / YYYY-MM) shape.
-  if (ncol(df) >= 1L) {
-    names(df)[1] <- "obs_time"
-    df$obs_time <- .tww_iso_obs_time(df$obs_time)
-  }
+  names(df)[1L] <- "obs_time"
+  df$obs_time <- .tww_iso_obs_time(df$obs_time)
   if (isTRUE(clean)) {
     df <- .tww_clean(df, na_codes)
   }
