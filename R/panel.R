@@ -358,10 +358,16 @@ utils::globalVariables(c("time", "station_id", "status"))
 }
 
 # Best-effort inference of `id_before` / `id_after` from the free-text `remark`,
-# for feeds (like CODiS station_list) that document the succession fields but do
-# not return them. Conservative: only fires on explicit "...(站碼NNNNNN)...新站"
-# (this station succeeds NNNNNN) or "...變更站碼為(NNNNNN)" (this station became
-# NNNNNN), and never overrides a value already present.
+# which is where the CODiS station_list feed records succession (it documents
+# the structured fields but does not return them). Reads the real phrasings:
+#   * this station SUCCEEDS an older one  -> id_before, cues like
+#     "(站碼466880)遷移之新站", "原氣象站(C0A540)…轉為…", "取代舊站", "升級/改制";
+#   * this station BECAME a new code      -> id_after, cues like
+#     "變更站碼為(C0UB10)", "由467770改為C0FA30", "更名為…".
+# Candidate codes are taken only from clear contexts (parentheses, after 站碼/
+# 改為/由), the station's own code is dropped, and "became" is checked before
+# "succeeds" so a predecessor's remark (which also says "原(self)站") is read as
+# id_after, not id_before. Never overrides a value already present.
 .tww_infer_succession <- function(stations) {
   ids <- as.character(stations$station_id)
   id_before <- if ("id_before" %in% names(stations)) {
@@ -371,27 +377,48 @@ utils::globalVariables(c("time", "station_id", "status"))
     as.character(stations$id_after)
   } else rep(NA_character_, length(ids))
 
-  if ("remark" %in% names(stations)) {
-    rmk <- as.character(stations$remark); rmk[is.na(rmk)] <- ""
-    code <- "[0-9A-Z][0-9A-Z]{5}"                  # 6-char CWA station code
-    grab <- function(text, anchor) {
-      m <- regmatches(text,
-                      regexpr(paste0(anchor, "\\s*[（(]?\\s*", code), text))
-      if (!length(m)) return(NA_character_)
-      cc <- regmatches(m, regexpr(code, m))
-      if (length(cc)) cc else NA_character_
-    }
-    for (i in seq_along(ids)) {
-      r <- rmk[i]
-      if ((is.na(id_before[i]) || !nzchar(id_before[i])) &&
-          grepl("新站|取代|前身", r)) {
-        cc <- grab(r, "站碼")
-        if (!is.na(cc) && cc != ids[i]) id_before[i] <- cc
+  if (!"remark" %in% names(stations)) {
+    stations$id_before <- id_before
+    stations$id_after  <- id_after
+    return(stations)
+  }
+
+  rmk  <- as.character(stations$remark); rmk[is.na(rmk)] <- ""
+  code <- "[0-9A-Z][0-9A-Z]{5}"                    # 6-char CWA station code
+  # Phrases that mark this station as the *successor* (so the predecessor code
+  # is the last code before the phrase) vs the *predecessor* (so the new code is
+  # the first code after the phrase). "Successor" wins when both appear, which
+  # disambiguates multi-history remarks like
+  #   "...變更站碼為(C0C480)。原(C0C480)...轉為(C2C480)農業站"  -> id_before = C0C480.
+  succ_cues <- c("轉為", "遷移之新站", "取代舊站", "升級為", "改制為")
+  aft_cues  <- c("變更站碼為", "改碼為", "改為", "更名為")
+  first_pos <- function(text, cues) {
+    ps <- vapply(cues, function(cu) {
+      m <- regexpr(cu, text); if (m > 0L) as.integer(m) else NA_integer_
+    }, integer(1))
+    if (all(is.na(ps))) NA_integer_ else min(ps, na.rm = TRUE)
+  }
+  for (i in seq_along(ids)) {
+    r <- rmk[i]
+    if (!nzchar(r)) next
+    g <- gregexpr(code, r)[[1]]
+    if (g[1] < 0L) next
+    cs <- regmatches(r, gregexpr(code, r))[[1]]
+    cp <- as.integer(g)
+    keep <- cs != ids[i]                           # drop the station's own code
+    cs <- cs[keep]; cp <- cp[keep]
+    if (!length(cs)) next
+    sp <- first_pos(r, succ_cues)
+    ap <- first_pos(r, aft_cues)
+    if (!is.na(sp)) {                              # this station succeeds another
+      before <- cs[cp < sp]
+      if (length(before) && (is.na(id_before[i]) || !nzchar(id_before[i]))) {
+        id_before[i] <- before[length(before)]     # nearest code before the cue
       }
-      if ((is.na(id_after[i]) || !nzchar(id_after[i])) &&
-          grepl("變更站碼為|改碼|更名為", r)) {
-        cc <- grab(r, "站碼為")
-        if (!is.na(cc) && cc != ids[i]) id_after[i] <- cc
+    } else if (!is.na(ap)) {                       # this station became another
+      after <- cs[cp > ap]
+      if (length(after) && (is.na(id_after[i]) || !nzchar(id_after[i]))) {
+        id_after[i] <- after[1]                    # first code after the cue
       }
     }
   }

@@ -111,14 +111,29 @@ test_that("plain panel without succession keeps the three base levels", {
                c("Not yet established", "Operating", "Decommissioned"))
 })
 
-test_that("succession is inferred from remark text, conservatively", {
+test_that("succession is inferred from real remark phrasings", {
   st <- data.frame(
-    station_id = c("466880", "466881"),
-    remark = c("2023/01/01遷移至新店區，並更名為臺北氣象站新北站區。",
-               "為臺北氣象站板橋站區(站碼466880)遷移之新站，於2023/01/03取代舊站。"),
+    station_id = c("466880", "466881", "C2A540", "C2C480", "467060", "467770",
+                   "466920"),
+    remark = c(
+      "2023/01/01遷移至新店區，並更名為臺北氣象站新北站區。",
+      "為臺北氣象站板橋站區(站碼466880)遷移之新站，於2023/01/03取代舊站。",
+      "原氣象站(C0A540)，於2024/05/31撤銷，並完成儀器汰換，轉為農業氣象站(C2A540)。",
+      paste0("本站原為雨量站(C1C480)，於2008/1/1擴充為氣象站，變更站碼為",
+             "(C0C480)。原(C0C480)自動氣象站，於2026/03/16完成儀器汰換，",
+             "轉為(C2C480)農業站。"),
+      "原(467060)站於2023/04/01起變更站碼為(C0UB10)站。",
+      "本站站碼於2022/8/1由467770改為C0FA30。",
+      "因本署改建，觀測地點移至臺北師院(466921)。"),
     stringsAsFactors = FALSE)
   out <- .tww_infer_succession(st)
-  expect_equal(out$id_before[out$station_id == "466881"], "466880")
-  # the older station's remark does not falsely point anywhere
-  expect_true(is.na(out$id_before[out$station_id == "466880"]))
+  gb <- function(id) out$id_before[out$station_id == id]
+  ga <- function(id) out$id_after[out$station_id == id]
+  expect_equal(gb("466881"), "466880")   # (站碼466880)遷移之新站
+  expect_equal(gb("C2A540"), "C0A540")   # 原(C0A540)...轉為(self)
+  expect_equal(gb("C2C480"), "C0C480")   # multi-history: nearest code before 轉為
+  expect_equal(ga("467060"), "C0UB10")   # 變更站碼為(C0UB10)
+  expect_equal(ga("467770"), "C0FA30")   # 由467770改為C0FA30
+  expect_true(is.na(gb("466880")))       # rename only, no code -> nothing
+  expect_true(is.na(gb("466920")) && is.na(ga("466920")))  # 移至(...) not a cue
 })
