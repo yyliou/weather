@@ -72,8 +72,6 @@ table(p$status)
 plot_station_panel(start = "1990-01-01", end = "2024-12-31", by = "year")
 ```
 
-![Station operating-status panel](man/figures/station-panel.png)
-
 - `by` is `"year"` (default), `"month"` or `"day"` — the time resolution of the
   columns. `start` / `end` accept `Date` objects or `YYYYMMDD` / `YYYY-MM-DD`
   strings.
@@ -84,13 +82,17 @@ plot_station_panel(start = "1990-01-01", end = "2024-12-31", by = "year")
 ```r
 st  <- get_stations(active_only = FALSE)
 tp  <- st[st$county == "臺北市", ]
-plot_station_panel(tp, start = "2000-01-01", end = "2024-12-31", by = "month")
+plot_station_panel(tp, start = "2000-01-01", end = "2024-12-31", by = "month",
+                   sort = "succession")
 ```
 
+![Station operating-status panel for Taipei](man/figures/station-panel.png)
+
 - `plot_station_panel()` returns a normal `ggplot`, so you can keep styling it.
-  Useful arguments: `sort` (`"start"` / `"duration"` / `"id"` / `"name"` /
-  `"none"` — `"duration"` orders stations by how long they operated, longest at
-  the top), `colors` (named vector for the status states), `label_col`
+  Useful arguments: `sort` (`"start"` / `"duration"` / `"succession"` / `"id"` /
+  `"name"` / `"none"` — `"duration"` orders rows by how long they operated and
+  `"succession"` groups them by colour), `colors` (named vector for the status
+  states), `label_col`
   (`"station_id"` or `"name"`) and `labels` (force the y-axis labels on/off).
   With many stations the y labels are hidden automatically (see `max_labels`).
 

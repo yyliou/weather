@@ -213,9 +213,10 @@ station_panel <- function(stations = NULL,
 #'   needs to be turned into a panel. Ignored when `x` is already a panel.
 #' @param sort How to order rows on the y axis: `"start"` (default, by set-up
 #'   date so the panel forms a staircase), `"duration"` (by how long the row
-#'   operated, longest at the top), `"succession"` (length first, then by the
-#'   row's current colour in the order operating / successor 1 / successor 2 /
-#'   decommissioned), `"id"`, `"name"` or `"none"` (keep input order).
+#'   operated, longest at the top), `"succession"` (grouped by the row's current
+#'   colour — operating / successor 1 / successor 2 / decommissioned — with the
+#'   longest rows at the top of each colour group), `"id"`, `"name"` or `"none"`
+#'   (keep input order).
 #' @param colors Named character vector of fill colours for the three states.
 #'   Defaults to a grey / green / red scheme.
 #' @param labels Logical or `NA`. Whether to print station labels on the y axis.
@@ -569,9 +570,9 @@ utils::globalVariables(c("time", "station_id", "status"))
     return(ids[order(dur, ids)])
   }
   if (sort == "succession") {
-    # Length first (longest at the top), then the row's *current* colour in the
-    # order operating (green) -> successor 1 (gold) -> successor 2 (purple) ->
-    # decommissioned (red).
+    # Group by the row's *current* colour first (so the colour ordering is
+    # visible): operating (green) -> successor 1 (gold) -> successor 2 (purple)
+    # -> decommissioned (red); within each colour, by length (longest at top).
     est <- attr(panel, "start_date")
     dec <- attr(panel, "end_date")
     if (!is.null(est)) {
@@ -595,7 +596,8 @@ utils::globalVariables(c("time", "station_id", "status"))
                  "Operating (successor 2)" = 3L, "Decommissioned" = 4L,
                  "Not yet established" = 5L)
     pri <- unname(pri_map[term[ids]]); pri[is.na(pri)] <- 9L
-    return(ids[order(dur, pri, ids)])
+    # colour primary (descending so green is at the top), length within.
+    return(ids[order(-pri, dur, ids)])
   }
   # sort == "start": by set-up date, then id. Use carried attribute when
   # present, else infer from the first operating period in the panel.
