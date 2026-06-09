@@ -100,7 +100,19 @@ load_tw_townships <- function(source = NULL,
   if (length(shp) == 0L) {
     stop("No .shp file found inside the zip.", call. = FALSE)
   }
-  sf::st_read(shp[1], quiet = TRUE)
+  sf::st_read(.tww_pick_township_shp(shp), quiet = TRUE)
+}
+
+# A zip can hold more than one shapefile (the NLSC bundle ships the island-wide
+# township layer "TOWN_MOI_*.shp" plus per-area extras such as "majia.shp").
+# Prefer the layer whose name starts with "town"; otherwise fall back to the
+# first one alphabetically.
+.tww_pick_township_shp <- function(shp) {
+  if (length(shp) == 1L) return(shp)
+  base <- tolower(basename(shp))
+  town <- shp[grepl("^town", base)]
+  if (length(town)) return(town[1])
+  shp[1]
 }
 
 .tww_standardise_boundaries <- function(poly, town_field, county_field) {
