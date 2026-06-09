@@ -119,21 +119,34 @@ wd <- get_weather(c("466920", "466930"), "2024-01-01", "2024-01-31", type = "dai
 
 ## 4. Township values (average, then fill gaps)
 
-Two stages:
+A **hybrid** method, applied to every *township × time step × variable* cell:
 
-1. **Average** the stations that fall inside each township (rainfall included —
-   a mean of the in-township gauges) for every time step and variable.
-2. **Fill** only the cells still missing — a township with no station of its
-   own, or a variable its own stations never report (e.g. pressure in a
-   rain-gauge-only district) — by **inverse-distance weighting (IDW)** of the
-   `k_nearest` surrounding stations that do report it:
+1. **Average** the stations that fall inside the township (rainfall included —
+   a mean of the in-township gauges).
+2. If that cell is still empty — the township has no station of its own, or a
+   variable its own stations never report (e.g. pressure in a rain-gauge-only
+   district) — **fill** it by **inverse-distance weighting (IDW)** of the
+   `k_nearest` surrounding stations that *do* report it (within `max_dist`, if
+   set):
 
-   ```
-   v = Σ wᵢ·xᵢ / Σ wᵢ ,   wᵢ = 1 / dᵢ^power
-   ```
+$$
+v \;=\; \frac{\sum_i w_i\,x_i}{\sum_i w_i}, \qquad w_i = \frac{1}{d_i^{\,\text{power}}}
+$$
 
-   where `dᵢ` is the great-circle distance from the township's representative
-   point to station *i*.
+where $d_i$ is the great-circle distance from the township's representative
+point to station $i$. If no station reports the variable, the cell stays `NA`.
+
+```mermaid
+flowchart TD
+    S["Download once:<br/>in-township stations + nearest pool (pool_size)"] --> C["For each cell:<br/>township × time step × variable"]
+    C --> Q1{"In-township station<br/>reports this variable?"}
+    Q1 -- yes --> AVG["Stage 1 — AVERAGE<br/>the in-township gauges<br/>(rainfall too)"]
+    AVG --> R1["value set<br/>used_fallback = FALSE"]
+    Q1 -- "no (gap)" --> Q2{"Pool station reports it,<br/>within max_dist?"}
+    Q2 -- yes --> IDW["Stage 2 — FILL by IDW of the k_nearest<br/>v = Σ wᵢ·xᵢ / Σ wᵢ ,  wᵢ = 1 / dᵢ^power"]
+    IDW --> R2["value set<br/>used_fallback = TRUE"]
+    Q2 -- no --> NA["stays NA"]
+```
 
 Only the in-township stations **plus a nearest pool** (`pool_size`) are
 downloaded — not every station in the country — so asking for a handful of
@@ -192,12 +205,21 @@ st  <- assign_township(st, bnd)            # adds township / county_geo / townid
 
 ## 5. Your own shapefile
 
-`get_region_weather()` is the general-purpose sibling of
-`get_township_weather()`: instead of the official township layer, you supply
-**your own** polygons (an `sf` object, or a path/URL to a shapefile / GeoPackage
-/ GeoJSON / zipped shapefile) and name the column that identifies each region.
-The same average-then-fill logic (rainfall included) applies — in-region
-stations are averaged, remaining gaps are IDW-filled from a nearby pool.
+**The algorithm is exactly the same as section 4** (average inside each region,
+then IDW-fill the gaps — diagram and formula above apply unchanged). The only
+differences are *what you aggregate to* and *how regions are keyed*:
+
+| | section 4 `get_township_weather()` | section 5 `get_region_weather()` |
+|---|---|---|
+| polygons | official township layer (`boundaries`) | **your own** `sf` / shapefile (`shp`) |
+| region key | `townid` (built in) | a column **you name** via `id_field` |
+| output key column | `townid` + `county` + `township` | `region` (your `id_field` values) |
+
+So `get_region_weather()` is just `get_township_weather()` pointed at arbitrary
+polygons: you supply the geometry (`shp`) and tell it which attribute column
+labels each polygon (`id_field`). Everything downstream — average, gap-fill,
+`power` / `k_nearest` / `max_dist` / `pool_size`, the balanced panel — is
+identical.
 
 ```r
 rw <- get_region_weather(
