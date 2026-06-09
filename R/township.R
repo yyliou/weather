@@ -147,11 +147,14 @@ load_tw_townships <- function(source = NULL,
                "name", "t_uname"))
   cf <- pick(county_field,
              c("county", "countyname", "c_name", "county_name", "cn"))
-  # The official township code (e.g. TOWNID / TOWNCODE on the NLSC layer). It is
-  # the stable, unique key get_township_weather() selects and aggregates on, so
-  # we carry it through whenever the source provides one.
+  # The official township code get_township_weather() selects and aggregates on.
+  # On the NLSC layer two code columns coexist: TOWNCODE is the 8-digit
+  # administrative code (e.g. "66000040" = 臺中市北屯區) while TOWNID is a short
+  # internal id (e.g. "T07"). The docs, examples and the `townid=` filter all use
+  # the 8-digit code, so prefer TOWNCODE and only fall back to TOWNID when no
+  # 8-digit code column exists.
   idf <- pick(NULL,
-              c("townid", "towncode", "town_id", "town_code", "towncode_",
+              c("towncode", "town_code", "towncode_", "townid", "town_id",
                 "t_id", "code"))
   if (is.na(tf)) {
     stop("Could not find a township-name column in the boundary layer. ",
