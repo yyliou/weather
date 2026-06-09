@@ -76,7 +76,9 @@ aggregated for every time step. **Rainfall is summed; everything else is
 averaged.**
 
 ```r
-# township boundaries as an sf layer (official 鄉鎮市區界線, or any sf source)
+# township boundaries as an sf layer. The default downloads the official NLSC
+# 鄉鎮市區界線(TWD97經緯度) shapefile from data.gov.tw (dataset 7441); zipped
+# shapefiles are unpacked automatically. Pass any sf-readable source to override.
 bnd <- load_tw_townships()                 # or load_tw_townships("twtowns.shp")
 
 tw <- get_township_weather(
@@ -108,9 +110,12 @@ st  <- assign_township(st, bnd)            # adds township / county_geo columns
 - Station metadata comes from the CODiS `station_list` endpoint
   (<https://codis.cwa.gov.tw/api/station_list>); if that endpoint moves, pass
   your own `url=` to `get_stations()`.
-- Township boundaries are **not** bundled. `load_tw_townships()` reads any
-  `sf`-readable source; for production use, download the official layer from
-  data.gov.tw and pass its path.
+- Township boundaries are **not** bundled. `load_tw_townships()` defaults to the
+  official NLSC 鄉鎮市區界線(TWD97經緯度) shapefile on data.gov.tw
+  (<https://data.gov.tw/dataset/7441>) and unpacks the zip for you. That download
+  URL embeds a release date and changes occasionally — if it 404s, grab the
+  current SHP link from the dataset page (or a local copy) and pass it via
+  `source=`.
 - Data source & terms: CWA CODiS via
   <https://mycolab.pp.nchu.edu.tw/historical_weather/>.
 

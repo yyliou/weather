@@ -1,15 +1,35 @@
+#' Default township boundary source
+#'
+#' The official "鄉鎮市區界線(TWD97經緯度)" shapefile published by the NLSC
+#' (內政部國土測繪中心) on data.gov.tw (dataset 7441). It ships as a zipped
+#' shapefile with `TOWNNAME` / `COUNTYNAME` attribute columns.
+#'
+#' The download URL embeds a release date (e.g. `...1140318.zip`) and is updated
+#' from time to time. If it 404s, grab the current SHP link from
+#' <https://data.gov.tw/dataset/7441> and pass it to [load_tw_townships()].
+#' @keywords internal
+.TWW_TOWNSHIP_SHP <- paste0(
+  "https://www.tgos.tw/tgos/VirtualDir/Product/",
+  "3fe61d4a-ca23-4f45-8aca-4a536f40f290/",
+  "%E9%84%89%28%E9%8E%AE%E3%80%81%E5%B8%82%E3%80%81%E5%8D%80%29",
+  "%E7%95%8C%E7%B7%9A1140318.zip"
+)
+
 #' Load Taiwan township boundary polygons
 #'
 #' Reads a township (鄉鎮市區) boundary layer as an \pkg{sf} object and
 #' normalises its town/county name columns. Any source readable by
-#' [sf::st_read()] works: a local shapefile/GeoPackage/GeoJSON path, or a URL.
+#' [sf::st_read()] works: a local shapefile/GeoPackage/GeoJSON path, a URL, or a
+#' zipped shapefile (local `.zip` path or URL) — zips are downloaded, unpacked
+#' and the contained `.shp` is read automatically.
 #'
-#' The default points at the official MOI / NLSC "鄉鎮市區界線" layer; because
-#' that endpoint changes from time to time, you can always download the boundary
-#' file yourself (e.g. from data.gov.tw) and pass its path here.
+#' The default points at the official NLSC "鄉鎮市區界線(TWD97經緯度)" shapefile
+#' on data.gov.tw (dataset 7441). Because that download URL embeds a release date
+#' and changes occasionally, you can always fetch the current SHP link from
+#' <https://data.gov.tw/dataset/7441> and pass it (or a local copy) via `source`.
 #'
-#' @param source Path or URL to a township boundary layer. Defaults to a known
-#'   public GeoJSON of Taiwan townships.
+#' @param source Path or URL to a township boundary layer, or a zipped
+#'   shapefile. Defaults to the data.gov.tw dataset 7441 SHP.
 #' @param town_field,county_field Optional explicit column names holding the
 #'   township and county names. If `NULL`, they are auto-detected from common
 #'   field names (`TOWNNAME`/`TOWN`/`T_Name`, `COUNTYNAME`/`COUNTY`/`C_Name`).
@@ -21,22 +41,45 @@ load_tw_townships <- function(source = NULL,
                               town_field = NULL,
                               county_field = NULL) {
   .tww_need_sf()
-  if (is.null(source)) {
-    source <- paste0(
-      "https://raw.githubusercontent.com/dkao-aero/taiwan-geojson/",
-      "master/towns.geojson"
-    )
-  }
+  if (is.null(source)) source <- .TWW_TOWNSHIP_SHP
   poly <- tryCatch(
-    sf::st_read(source, quiet = TRUE),
+    .tww_read_boundary(source),
     error = function(e) {
       stop("Could not read township boundaries from:\n  ", source,
            "\n  ", conditionMessage(e),
-           "\nSupply a local shapefile/GeoJSON path via `source=`.",
+           "\nDownload the current SHP from https://data.gov.tw/dataset/7441 ",
+           "and pass its path/URL via `source=`.",
            call. = FALSE)
     }
   )
   .tww_standardise_boundaries(poly, town_field, county_field)
+}
+
+# Read any supported source into an sf object. Zipped shapefiles (local or
+# remote) are downloaded as needed, unpacked to a temp dir, and the first .shp
+# inside is read; everything else is handed straight to sf::st_read().
+.tww_read_boundary <- function(source) {
+  is_url <- grepl("^(https?|ftp)://", source, ignore.case = TRUE)
+  is_zip <- grepl("\\.zip($|\\?)", source, ignore.case = TRUE)
+  if (!is_zip) {
+    return(sf::st_read(source, quiet = TRUE))
+  }
+  local_zip <- source
+  if (is_url) {
+    local_zip <- tempfile(fileext = ".zip")
+    old <- options(timeout = max(600, getOption("timeout", 60)))
+    on.exit(options(old), add = TRUE)
+    utils::download.file(source, local_zip, mode = "wb", quiet = TRUE)
+  }
+  exdir <- tempfile("tww_shp_")
+  dir.create(exdir)
+  utils::unzip(local_zip, exdir = exdir)
+  shp <- list.files(exdir, pattern = "\\.shp$", full.names = TRUE,
+                    recursive = TRUE)
+  if (length(shp) == 0L) {
+    stop("No .shp file found inside the zip.", call. = FALSE)
+  }
+  sf::st_read(shp[1], quiet = TRUE)
 }
 
 .tww_standardise_boundaries <- function(poly, town_field, county_field) {
