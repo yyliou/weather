@@ -39,7 +39,7 @@
 #'   station table carries succession info, an operating station that has taken
 #'   over from an older, re-coded/relocated station is shown in a distinct state:
 #'   `"Operating (successor 1)"` for the first successor in a chain,
-#'   `"Operating (successor 2+)"` for the second-or-later. Succession is read
+#'   `"Operating (successor 2)"` for the second. Succession is read
 #'   from `id_before` / `id_after` columns when present; otherwise it is inferred
 #'   from the `remark` text (see `infer_remark`). With no succession found, the
 #'   plain three states are used. Supply `id_before` / `id_after` yourself for
@@ -54,7 +54,7 @@
 #'   `Date` marking the start of the period), `period` (a label such as
 #'   `"2020"` or `"2020-03"`) and `status` (a factor; levels are the three base
 #'   states, expanded with `"Operating (successor 1)"` /
-#'   `"Operating (successor 2+)"` when succession is detected). The
+#'   `"Operating (successor 2)"` when succession is detected). The
 #'   set-up / decommission dates are carried in `attr(x, "start_date")` and
 #'   `attr(x, "end_date")` (named by `station_id`) for sorting downstream.
 #'
@@ -157,7 +157,7 @@ station_panel <- function(stations = NULL,
         rk <- max(mr[om])                          # latest successor operating
         status_mat[ui, j] <- if (rk <= 0L) op_lvl
           else if (rk == 1L) "Operating (successor 1)"
-          else "Operating (successor 2+)"
+          else "Operating (successor 2)"
       } else if (pe[j] < earliest) {
         status_mat[ui, j] <- not_lvl
       } else {
@@ -211,10 +211,11 @@ station_panel <- function(stations = NULL,
 #'   `end`, `by` and `active_only` to build one.
 #' @param start,end,by,active_only Passed to [station_panel()] when `x` still
 #'   needs to be turned into a panel. Ignored when `x` is already a panel.
-#' @param sort How to order stations on the y axis: `"start"` (default, by
-#'   set-up date so the panel forms a staircase), `"duration"` (by how long the
-#'   station operated, longest at the top), `"id"`, `"name"` or `"none"` (keep
-#'   input order).
+#' @param sort How to order rows on the y axis: `"start"` (default, by set-up
+#'   date so the panel forms a staircase), `"duration"` (by how long the row
+#'   operated, longest at the top), `"succession"` (length first, then by the
+#'   row's current colour in the order operating / successor 1 / successor 2 /
+#'   decommissioned), `"id"`, `"name"` or `"none"` (keep input order).
 #' @param colors Named character vector of fill colours for the three states.
 #'   Defaults to a grey / green / red scheme.
 #' @param labels Logical or `NA`. Whether to print station labels on the y axis.
@@ -245,8 +246,8 @@ plot_station_panel <- function(x = NULL,
                                start = NULL, end = NULL,
                                by = c("year", "month", "day"),
                                active_only = FALSE,
-                               sort = c("start", "duration", "id", "name",
-                                        "none"),
+                               sort = c("start", "duration", "succession",
+                                        "id", "name", "none"),
                                colors = .tww_status_colors(),
                                labels = NA,
                                max_labels = 60L,
@@ -346,7 +347,7 @@ utils::globalVariables(c("time", "station_id", "status"))
     return(c("Not yet established", "Operating", "Decommissioned"))
   }
   c("Not yet established", "Operating",
-    "Operating (successor 1)", "Operating (successor 2+)",
+    "Operating (successor 1)", "Operating (successor 2)",
     "Decommissioned")
 }
 
@@ -378,7 +379,10 @@ utils::globalVariables(c("time", "station_id", "status"))
   pred
 }
 
-# Chain depth per station: how many stations precede it. 0 = original,
+# Chain depth per station: how many *present* stations precede it. Only
+# predecessors that are themselves in the table count, so a station whose old
+# code is not in the data (a pure re-numbering, e.g. C1A970 關渡) is rank 0 — its
+# bar is one continuous "Operating", not a stray successor colour. 0 = original,
 # 1 = first successor, 2 = second successor, ... Named by `station_id`.
 .tww_succession_rank <- function(stations) {
   pred <- .tww_pred_map(stations)
@@ -386,9 +390,9 @@ utils::globalVariables(c("time", "station_id", "status"))
   rank <- stats::setNames(integer(length(ids)), ids)
   for (id in ids) {
     r <- 0L; cur <- pred[[id]]; seen <- character(0)
-    while (!is.na(cur) && nzchar(cur) && !(cur %in% seen) && r < 50L) {
-      r <- r + 1L; seen <- c(seen, cur)
-      cur <- if (cur %in% ids) pred[[cur]] else NA_character_
+    while (!is.na(cur) && nzchar(cur) && cur %in% ids &&
+           !(cur %in% seen) && r < 50L) {
+      r <- r + 1L; seen <- c(seen, cur); cur <- pred[[cur]]
     }
     rank[[id]] <- r
   }
@@ -396,17 +400,19 @@ utils::globalVariables(c("time", "station_id", "status"))
 }
 
 # Origin (rank-0) station of each station's succession chain, so all members of
-# a chain share one `root` and can be stacked on a single panel row. Named by
-# `station_id`; a station with no predecessor is its own root.
+# a chain share one `root` and can be stacked on a single panel row. Follows
+# predecessors only while they are *present* in the table, so the root is the
+# earliest member actually in the data. Named by `station_id`.
 .tww_succession_root <- function(stations) {
   pred <- .tww_pred_map(stations)
   ids  <- names(pred)
   root <- stats::setNames(ids, ids)
   for (id in ids) {
     cur <- id; seen <- character(0)
-    while (cur %in% ids && !is.na(pred[[cur]]) && nzchar(pred[[cur]]) &&
-           !(pred[[cur]] %in% seen) && length(seen) < 50L) {
-      seen <- c(seen, cur); cur <- pred[[cur]]
+    while (cur %in% ids) {
+      p <- pred[[cur]]
+      if (is.na(p) || !nzchar(p) || !(p %in% ids) || p %in% seen) break
+      seen <- c(seen, cur); cur <- p
     }
     root[[id]] <- cur
   }
@@ -561,6 +567,35 @@ utils::globalVariables(c("time", "station_id", "status"))
     # Shortest first (bottom), longest last (top of the y axis).
     dur[is.na(dur)] <- -Inf
     return(ids[order(dur, ids)])
+  }
+  if (sort == "succession") {
+    # Length first (longest at the top), then the row's *current* colour in the
+    # order operating (green) -> successor 1 (gold) -> successor 2 (purple) ->
+    # decommissioned (red).
+    est <- attr(panel, "start_date")
+    dec <- attr(panel, "end_date")
+    if (!is.null(est)) {
+      s <- as.numeric(est[ids]); e <- as.numeric(dec[ids])
+      win_s <- attr(panel, "start"); win_e <- attr(panel, "end")
+      if (!is.null(win_s)) s[is.na(s)] <- as.numeric(as.Date(win_s))
+      if (!is.null(win_e)) e[is.na(e)] <- as.numeric(as.Date(win_e))
+      dur <- e - s
+    } else {
+      op  <- panel[grepl("^Operating", as.character(panel$status)), , drop = FALSE]
+      cnt <- tapply(rep(1L, nrow(op)), as.character(op$station_id), sum)
+      dur <- as.numeric(cnt[ids])
+    }
+    dur[is.na(dur)] <- -Inf
+    # terminal colour = status in the latest period of each row
+    o  <- order(as.character(panel$station_id), panel$time)
+    pp <- panel[o, , drop = FALSE]
+    term <- tapply(as.character(pp$status), as.character(pp$station_id),
+                   function(s) s[length(s)])
+    pri_map <- c("Operating" = 1L, "Operating (successor 1)" = 2L,
+                 "Operating (successor 2)" = 3L, "Decommissioned" = 4L,
+                 "Not yet established" = 5L)
+    pri <- unname(pri_map[term[ids]]); pri[is.na(pri)] <- 9L
+    return(ids[order(dur, pri, ids)])
   }
   # sort == "start": by set-up date, then id. Use carried attribute when
   # present, else infer from the first operating period in the panel.

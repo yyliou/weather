@@ -105,7 +105,21 @@ test_that("a succession chain stacks onto one row, coloured by depth", {
   expect_true(any(grepl("successor", levels(p$status))))
   expect_equal(stat(p, "OLD", "2005"), "Operating")                  # OLD segment
   expect_equal(stat(p, "OLD", "2015"), "Operating (successor 1)")    # NEW1 to its right
-  expect_equal(stat(p, "OLD", "2021"), "Operating (successor 2+)")   # NEW2 further right
+  expect_equal(stat(p, "OLD", "2021"), "Operating (successor 2)")    # NEW2 further right
+})
+
+test_that("a re-numbered station with an absent predecessor stays the origin", {
+  st <- data.frame(
+    station_id = "C1A970",
+    start_date = as.Date("1992-02-27"),
+    end_date   = as.Date(NA),
+    id_before  = "C0A970",          # old code, NOT present in the table
+    stringsAsFactors = FALSE)
+  expect_equal(unname(.tww_succession_rank(st)["C1A970"]), 0L)
+  expect_equal(unname(.tww_succession_root(st)["C1A970"]), "C1A970")
+  p <- station_panel(st, "1992-01-01", "2024-12-31", by = "year")
+  expect_true(all(p$status == "Operating"))                # one continuous green bar
+  expect_false(any(grepl("successor", as.character(p$status))))
 })
 
 test_that("plain panel without succession keeps the three base levels", {

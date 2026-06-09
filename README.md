@@ -103,7 +103,7 @@ by a successor (e.g. 466880 板橋 → 466881 新北). With `succession = "auto"
 (default), a whole succession chain is **stacked onto one row**: the origin
 station's operating segment on the left (green), then each successor continuing
 to its right — gold for `Operating (successor 1)`, purple for
-`Operating (successor 2+)` — so the row reads as one continuous timeline. The
+`Operating (successor 2)` — so the row reads as one continuous timeline. The
 links are read from `id_before` / `id_after` columns when present; the CODiS
 `station_list` feed doesn't expose them as fields, so by default they're
 inferred (conservatively) from the `remark` text. Supply `id_before` /
