@@ -65,6 +65,12 @@ test_that("bad inputs are rejected", {
   expect_error(station_panel(42, 20200101, 20201231), "data frame")
 })
 
+test_that("duration sort orders stations by operating length", {
+  p <- station_panel(make_stations(), "2000-01-01", "2024-12-31", by = "year")
+  # B operates ~5y, D ~6y, C the full window, A the longest -> shortest first.
+  expect_equal(.tww_station_order(p, "duration"), c("B", "D", "C", "A"))
+})
+
 test_that("plot_station_panel returns a ggplot when ggplot2 is available", {
   testthat::skip_if_not_installed("ggplot2")
   p  <- station_panel(make_stations(), 20000101, 20241231, by = "year")

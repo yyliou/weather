@@ -174,14 +174,33 @@
 }
 
 # Convert known CODiS missing-value sentinels to NA in numeric-looking columns.
+#
+# The feed often writes missing cells as the literal text "NA" (sometimes padded,
+# e.g. " NA ", or as other tokens like "X" / "--"). read.csv's `na.strings` only
+# catches an exact, untrimmed "NA", so those slip through as character values.
+# A column that mixes real numbers with such tokens then fails the
+# "is it numeric?" test below and is left as character — which makes it invisible
+# to the aggregator (it only sums/averages numeric columns), so whole variables
+# come back empty. We therefore blank out NA-like tokens (case- and
+# whitespace-insensitive) *before* the numeric coercion, so the column converts
+# cleanly to numeric with genuine NAs.
+.tww_na_tokens <- function() {
+  c("", "na", "n/a", "null", "nan", "none", "nil", "--", "-", "...", ".", "x")
+}
+
 .tww_clean <- function(df, na_codes) {
+  tokens <- .tww_na_tokens()
   cols <- setdiff(names(df), "obs_time")
   for (nm in cols) {
     v <- df[[nm]]
     if (is.character(v)) {
-      vn <- suppressWarnings(as.numeric(v))
-      # only coerce when the column is genuinely numeric (ignoring NAs)
-      if (all(is.na(vn) == is.na(v))) v <- vn
+      vt <- trimws(v)
+      vt[tolower(vt) %in% tokens] <- NA_character_
+      vn <- suppressWarnings(as.numeric(vt))
+      # Coerce to numeric when every non-missing entry parsed as a number
+      # (i.e. as.numeric only introduced NAs where the value was already blank).
+      parse_fail <- is.na(vn) & !is.na(vt)
+      v <- if (!any(parse_fail)) vn else vt
     }
     if (is.numeric(v) && length(na_codes)) {
       v[v %in% na_codes] <- NA

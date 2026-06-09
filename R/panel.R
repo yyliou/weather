@@ -149,8 +149,9 @@ station_panel <- function(stations = NULL,
 #' @param start,end,by,active_only Passed to [station_panel()] when `x` still
 #'   needs to be turned into a panel. Ignored when `x` is already a panel.
 #' @param sort How to order stations on the y axis: `"start"` (default, by
-#'   set-up date so the panel forms a staircase), `"id"`, `"name"` or `"none"`
-#'   (keep input order).
+#'   set-up date so the panel forms a staircase), `"duration"` (by how long the
+#'   station operated, longest at the top), `"id"`, `"name"` or `"none"` (keep
+#'   input order).
 #' @param colors Named character vector of fill colours for the three states.
 #'   Defaults to a grey / green / red scheme.
 #' @param labels Logical or `NA`. Whether to print station labels on the y axis.
@@ -181,7 +182,8 @@ plot_station_panel <- function(x = NULL,
                                start = NULL, end = NULL,
                                by = c("year", "month", "day"),
                                active_only = FALSE,
-                               sort = c("start", "id", "name", "none"),
+                               sort = c("start", "duration", "id", "name",
+                                        "none"),
                                colors = .tww_status_colors(),
                                labels = NA,
                                max_labels = 60L,
@@ -338,6 +340,29 @@ utils::globalVariables(c("time", "station_id", "status"))
     lk <- panel[!duplicated(panel$station_id), , drop = FALSE]
     nm <- lk$name[match(ids, as.character(lk$station_id))]
     return(ids[order(nm, ids, na.last = TRUE)])
+  }
+  if (sort == "duration") {
+    # Operating length per station. Prefer the carried set-up/decommission
+    # dates (unknown set-up -> window start, unknown decommission -> window
+    # end); otherwise fall back to counting operating periods in the panel.
+    est <- attr(panel, "start_date")
+    dec <- attr(panel, "end_date")
+    if (!is.null(est)) {
+      s <- as.numeric(est[ids])
+      e <- as.numeric(dec[ids])
+      win_s <- attr(panel, "start")
+      win_e <- attr(panel, "end")
+      if (!is.null(win_s)) s[is.na(s)] <- as.numeric(as.Date(win_s))
+      if (!is.null(win_e)) e[is.na(e)] <- as.numeric(as.Date(win_e))
+      dur <- e - s
+    } else {
+      op  <- panel[panel$status == .tww_status_levels()[2], , drop = FALSE]
+      cnt <- tapply(rep(1L, nrow(op)), as.character(op$station_id), sum)
+      dur <- as.numeric(cnt[ids])
+    }
+    # Shortest first (bottom), longest last (top of the y axis).
+    dur[is.na(dur)] <- -Inf
+    return(ids[order(dur, ids)])
   }
   # sort == "start": by set-up date, then id. Use carried attribute when
   # present, else infer from the first operating period in the panel.

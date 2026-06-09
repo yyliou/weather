@@ -9,10 +9,10 @@ The package gives you these functions:
 | Function | Purpose |
 |---|---|
 | `get_stations()` | 測站基本資料 — station metadata (id, name, lon/lat, county) |
-| `get_weather()` | 測量資料 — station observation time series (hourly / daily / monthly) |
-| `get_township_weather()` | 加總到鄉鎮 — aggregate stations up to township level by coordinates |
-| `get_region_weather()` | 加總到自訂區域 — aggregate stations over your own shapefile, keyed by one id column |
 | `station_panel()` / `plot_station_panel()` | 營運狀態面板 — panelview-style station operating-status panel (Not yet established / Operating / Decommissioned) over a time window |
+| `get_weather()` | 測量資料 — station observation time series (hourly / daily / monthly) |
+| `get_township_weather()` | 加總到鄉鎮 — aggregate stations up to township level by coordinates (keyed on townid) |
+| `get_region_weather()` | 加總到自訂區域 — aggregate stations over your own shapefile, keyed by one id column |
 
 ## Install
 
@@ -51,7 +51,52 @@ table with at least `station_id`, `name`, `lon`, `lat`, plus `altitude`,
 `active_only = FALSE` to include decommissioned ones, or `raw = TRUE` to get the
 provider's original columns untouched.
 
-## 2. Measurement data
+## 2. Station operating-status panel
+
+A [panelview](https://yiqingxu.org/packages/panelView/)-style view of which
+stations were operating over a window. Each station's `start_date` (set-up) and
+`end_date` (decommission) classify every time step into one of three states —
+`Not yet established`, `Operating` or `Decommissioned` — so you can see, at a
+glance, when stations came online and when they were retired. The labels are in
+English so the plot carries no Chinese text.
+
+```r
+# build the long status table: one row per station per period
+p <- station_panel(start = "1990-01-01", end = "2024-12-31", by = "year")
+table(p$status)
+
+# plot it (needs ggplot2; in Suggests)
+# install.packages("ggplot2")
+plot_station_panel(start = "1990-01-01", end = "2024-12-31", by = "year")
+```
+
+![Station operating-status panel](man/figures/station-panel.png)
+
+- `by` is `"year"` (default), `"month"` or `"day"` — the time resolution of the
+  columns. `start` / `end` accept `Date` objects or `YYYYMMDD` / `YYYY-MM-DD`
+  strings.
+- By default the metadata is fetched with `active_only = FALSE`, so
+  decommissioned stations are kept (otherwise `Decommissioned` could never show
+  up). Pass your own metadata to restrict the panel:
+
+```r
+st  <- get_stations(active_only = FALSE)
+tp  <- st[st$county == "臺北市", ]
+plot_station_panel(tp, start = "2000-01-01", end = "2024-12-31", by = "month")
+```
+
+- `plot_station_panel()` returns a normal `ggplot`, so you can keep styling it.
+  Useful arguments: `sort` (`"start"` / `"duration"` / `"id"` / `"name"` /
+  `"none"` — `"duration"` orders stations by how long they operated, longest at
+  the top), `colors` (named vector for the three states), `label_col`
+  (`"station_id"` or `"name"`) and `labels` (force the y-axis labels on/off).
+  With many stations the y labels are hidden automatically (see `max_labels`).
+
+A station with a missing set-up date is treated as "set up before the window"
+and a missing decommission date as "still operating", so stations with unknown
+dates default to `Operating` rather than dropping out of the plot.
+
+## 3. Measurement data
 
 ```r
 # one station, hourly
@@ -69,9 +114,10 @@ wd <- get_weather(c("466920", "466930"), "2024-01-01", "2024-01-31", type = "dai
   (observation time) is renamed `obs_time` and normalised to ISO format
   (`YYYY-MM-DD`, or `YYYY-MM` for monthly).
 - With `clean = TRUE` (default), value columns are coerced to numeric and CODiS
-  missing-value sentinels (e.g. `-99.8`, `-9999`) become `NA`.
+  missing-value sentinels (e.g. `-99.8`, `-9999`, and literal text like `"NA"` /
+  `"--"`) become `NA`.
 
-## 3. Township aggregation
+## 4. Township aggregation
 
 Each station is reverse-geocoded — its longitude/latitude is matched to the
 township polygon that contains it — then stations in the same township are
@@ -84,29 +130,36 @@ averaged.**
 # shapefiles are unpacked automatically. Pass any sf-readable source to override.
 bnd <- load_tw_townships()                 # or load_tw_townships("twtowns.shp")
 
+# every township that has a station:
+tw_all <- get_township_weather(
+  start = "2024-01-01", end = "2024-01-07", type = "daily", boundaries = bnd
+)
+
+# just a couple of townships, selected by their townid codes:
 tw <- get_township_weather(
   start = "2024-01-01", end = "2024-01-07", type = "daily",
   boundaries = bnd,
-  county     = "臺中市",                    # districts are county + township
-  townships  = c("北屯區", "西屯區"),       # omit to do every township
-  k_nearest  = 10                           # nearest non-NA stations for fallback
+  townid     = c("66000040", "66000050"),   # omit to do every township
+  k_nearest  = 10                            # nearest non-NA stations for fallback
 )
 ```
 
-Townships are keyed on **county + township** because district names repeat
-across Taiwan (中山區 is in both 臺北市 and 基隆市). `台`/`臺` are treated as
-equal, so `county = "台中市"` works too.
+Townships are keyed on **`townid`** — the official township code (`TOWNID` /
+`TOWNCODE`) carried through from the boundary layer. A single code is
+unambiguous, unlike district *names* which repeat across Taiwan (中山區 is in
+both 臺北市 and 基隆市). The boundary layer must therefore include a township-code
+column; `load_tw_townships()` keeps it for you.
 
-Each requested district gets one row per time step (a **balanced, gap-free
-panel**). When a district has **no valid value** for a given time step /
+Each requested township gets one row per time step (a **balanced, gap-free
+panel**). When a township has **no valid value** for a given time step /
 variable — no station inside its polygon, or every in-township station is `NA`
-there — that cell is filled by walking outward from the district centroid and
+there — that cell is filled by walking outward from the township centroid and
 averaging the `k_nearest` (default 10) closest stations that **actually report a
 value** there, skipping any that are `NA`. `pool_size` controls how many nearby
 stations are downloaded to search (default `max(30, 3 * k_nearest)`).
 
-Output columns: `county`, `township`, `obs_time`, one column per aggregated
-variable, `n_stations` (in-township stations feeding the row) and
+Output columns: `townid`, `county`, `township`, `obs_time`, one column per
+aggregated variable, `n_stations` (in-township stations feeding the row) and
 `used_fallback` (`TRUE` when any cell came from the nearest-station pool). The
 contributing in-township station ids are stored in `attr(tw, "stations")`.
 
@@ -120,10 +173,10 @@ You can also use the building blocks directly:
 
 ```r
 st  <- get_stations()
-st  <- assign_township(st, bnd)            # adds township / county_geo columns
+st  <- assign_township(st, bnd)            # adds township / county_geo / townid
 ```
 
-## 4. Aggregation over your own shapefile
+## 5. Aggregation over your own shapefile
 
 `get_region_weather()` is the general-purpose sibling of
 `get_township_weather()`: instead of the official township layer, you supply
@@ -146,48 +199,6 @@ rw <- get_region_weather(
 Output columns: `region` (your `id_field` values), `obs_time`, one column per
 aggregated variable, `n_stations` and `used_fallback`. Polygons that share an
 `id_field` value are unioned and treated as a single region.
-
-## 5. Station operating-status panel
-
-A [panelview](https://yiqingxu.org/packages/panelView/)-style view of which
-stations were operating over a window. Each station's `start_date` (set-up) and
-`end_date` (decommission) classify every time step into one of three states —
-`Not yet established`, `Operating` or `Decommissioned` — so you can see, at a
-glance, when stations came online and when they were retired. The labels are in
-English so the plot carries no Chinese text.
-
-```r
-# build the long status table: one row per station per period
-p <- station_panel(start = "1990-01-01", end = "2024-12-31", by = "year")
-table(p$status)
-
-# plot it (needs ggplot2; in Suggests)
-# install.packages("ggplot2")
-plot_station_panel(start = "1990-01-01", end = "2024-12-31", by = "year")
-```
-
-- `by` is `"year"` (default), `"month"` or `"day"` — the time resolution of the
-  columns. `start` / `end` accept `Date` objects or `YYYYMMDD` / `YYYY-MM-DD`
-  strings.
-- By default the metadata is fetched with `active_only = FALSE`, so
-  decommissioned stations are kept (otherwise `Decommissioned` could never show
-  up). Pass your own metadata to restrict the panel:
-
-```r
-st  <- get_stations(active_only = FALSE)
-tp  <- st[st$county == "臺北市", ]
-plot_station_panel(tp, start = "2000-01-01", end = "2024-12-31", by = "month")
-```
-
-- `plot_station_panel()` returns a normal `ggplot`, so you can keep styling it.
-  Useful arguments: `sort` (`"start"` / `"id"` / `"name"` / `"none"`),
-  `colors` (named vector for the three states), `label_col` (`"station_id"` or
-  `"name"`) and `labels` (force the y-axis labels on/off). With many stations
-  the y labels are hidden automatically (see `max_labels`).
-
-A station with a missing set-up date is treated as "set up before the window"
-and a missing decommission date as "still operating", so stations with unknown
-dates default to `Operating` rather than dropping out of the plot.
 
 ## Notes
 

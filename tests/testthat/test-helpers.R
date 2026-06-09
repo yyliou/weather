@@ -38,6 +38,20 @@ test_that("cleaning converts sentinels to NA", {
   expect_equal(out$rain, c(0.0, 1.5))
 })
 
+test_that("cleaning treats literal 'NA' text (and padding) as missing", {
+  df <- data.frame(
+    obs_time = c("2024-01-01", "2024-01-02", "2024-01-03"),
+    temp     = c("18.4", "NA", " NA "),   # literal text, one padded
+    pres     = c("1010", "--", "1012"),   # other NA-like token
+    check.names = FALSE, stringsAsFactors = FALSE
+  )
+  out <- .tww_clean(df, .tww_default_na_codes())
+  expect_true(is.numeric(out$temp))       # column coerces despite the "NA" text
+  expect_equal(out$temp, c(18.4, NA, NA))
+  expect_true(is.numeric(out$pres))
+  expect_equal(out$pres, c(1010, NA, 1012))
+})
+
 test_that("rbind_fill unions columns", {
   a <- data.frame(station_id = "1", obs_time = "t", x = 1, stringsAsFactors = FALSE)
   b <- data.frame(station_id = "2", obs_time = "t", y = 2, stringsAsFactors = FALSE)

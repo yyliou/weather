@@ -1,35 +1,19 @@
-# Tests for the county+township resolution and the nearest-station fallback
-# (questions 1-3). These exercise the pure helpers and only touch `sf` for the
-# centroid-based pool, so they run without any network access.
+# Tests for the townid-keyed aggregation and the nearest-station fallback.
+# These exercise the pure helpers and only touch `sf` for the centroid-based
+# pool, so they run without any network access.
 
-test_that(".tww_norm_name folds 台 -> 臺 and trims", {
-  expect_equal(.tww_norm_name(c(" 台中市 ", "臺北市", NA)),
-               c("臺中市", "臺北市", NA_character_))
-})
-
-test_that("county + township resolves a non-unique district unambiguously", {
-  bnd <- data.frame(
-    county   = c("臺中市", "臺中市", "臺北市", "基隆市"),
-    township = c("北屯區", "西屯區", "中山區", "中山區"),
-    stringsAsFactors = FALSE
+test_that("standardise_boundaries keeps a townid column when present", {
+  testthat::skip_if_not_installed("sf")
+  sq  <- sf::st_polygon(list(rbind(c(0, 0), c(1, 0), c(1, 1), c(0, 1), c(0, 0))))
+  shp <- sf::st_sf(
+    TOWNNAME   = "北屯區",
+    COUNTYNAME = "臺中市",
+    TOWNID     = "66000040",
+    geometry   = sf::st_sfc(sq, crs = 4326)
   )
-  # with a county, only that county's 中山區 comes back
-  one <- .tww_target_regions(bnd, stations = NULL,
-                             county = "臺北市", townships = "中山區")
-  expect_equal(nrow(one), 1L)
-  expect_equal(one$county, "臺北市")
-
-  # 台 (simplified) still matches the official 臺 boundary names
-  tc <- .tww_target_regions(bnd, stations = NULL,
-                            county = "台中市",
-                            townships = c("北屯區", "西屯區"))
-  expect_equal(sort(tc$township), c("北屯區", "西屯區"))
-  expect_true(all(tc$county == "臺中市"))
-
-  # without a county, an ambiguous name expands to every matching county
-  both <- .tww_target_regions(bnd, stations = NULL,
-                              county = NULL, townships = "中山區")
-  expect_equal(nrow(both), 2L)
+  std <- .tww_standardise_boundaries(shp, NULL, NULL)
+  expect_true(all(c("township", "county", "townid") %in% names(std)))
+  expect_equal(std$townid, "66000040")
 })
 
 test_that("aggregation falls back to nearest stations per cell", {
@@ -70,7 +54,7 @@ test_that("aggregation falls back to nearest stations per cell", {
   expect_true(xt1$used_fallback)
 })
 
-test_that("nearest-k pool is keyed on the township centroid", {
+test_that("nearest pool is keyed on the township centroid (by townid)", {
   testthat::skip_if_not_installed("sf")
 
   # two unit-square townships side by side: A sits in the left, B in the right
@@ -79,25 +63,47 @@ test_that("nearest-k pool is keyed on the township centroid", {
   bnd <- sf::st_sf(
     county   = c("臺中市", "臺中市"),
     township = c("左區", "右區"),
+    townid   = c("L01", "R01"),
     geometry = sf::st_sfc(sq(0), sq(2), crs = 4326)
   )
   stations <- data.frame(
     station_id = c("A", "B"),
     name       = c("a", "b"),
     lon        = c(0.5, 2.5), lat = c(0.5, 0.5),
-    county_geo = c("臺中市", "臺中市"),
-    township   = c("左區", "右區"),
+    townid     = c("L01", "R01"),
     stringsAsFactors = FALSE
   )
-  regions <- .tww_target_regions(bnd, stations, county = "臺中市",
-                                 townships = c("左區", "右區"))
-  regions <- .tww_attach_station_pools(regions, bnd, stations, pool_size = 1)
+  regions <- data.frame(townid = c("L01", "R01"), stringsAsFactors = FALSE)
+  regions <- .tww_attach_region_pools(regions, bnd, stations, pool_size = 1,
+                                      key = "townid")
 
-  left  <- which(regions$township == "左區")
-  right <- which(regions$township == "右區")
+  left  <- which(regions$townid == "L01")
+  right <- which(regions$townid == "R01")
   expect_equal(regions$near_ids[[left]],  "A")   # nearest to left centroid
   expect_equal(regions$near_ids[[right]], "B")   # nearest to right centroid
   expect_equal(regions$in_ids[[left]],  "A")
+})
+
+test_that("assign_township carries through the townid code", {
+  testthat::skip_if_not_installed("sf")
+  sq <- function(x0) sf::st_polygon(list(rbind(
+    c(x0, 0), c(x0 + 1, 0), c(x0 + 1, 1), c(x0, 1), c(x0, 0))))
+  bnd <- sf::st_sf(
+    TOWNNAME   = c("左區", "右區"),
+    COUNTYNAME = c("臺中市", "臺中市"),
+    TOWNID     = c("L01", "R01"),
+    geometry   = sf::st_sfc(sq(0), sq(2), crs = 4326)
+  )
+  stations <- data.frame(
+    station_id = c("A", "B"),
+    name       = c("a", "b"),
+    lon = c(0.5, 2.5), lat = c(0.5, 0.5),
+    stringsAsFactors = FALSE
+  )
+  out <- assign_township(stations, bnd)
+  expect_true("townid" %in% names(out))
+  expect_equal(out$townid, c("L01", "R01"))
+  expect_equal(out$township, c("左區", "右區"))
 })
 
 test_that("fallback walks past NA stations to find non-NA values", {
