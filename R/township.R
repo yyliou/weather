@@ -273,7 +273,10 @@ assign_township <- function(stations, boundaries) {
 #' @param pool_size Number of nearest stations (by distance to the township
 #'   centroid) whose observations are downloaded to search for those non-`NA`
 #'   values. Must be `>= k_nearest`; the larger it is, the more likely every
-#'   cell can be filled. `NULL` (default) uses `max(30, 3 * k_nearest)`.
+#'   cell can be filled. `NULL` (default) uses `max(30, 3 * k_nearest)`. Pass
+#'   `Inf` to rank **every** station, guaranteeing each cell reaches the nearest
+#'   non-`NA` station (a fully balanced panel) at the cost of downloading all
+#'   stations.
 #' @param stations Optional pre-fetched station table (from [get_stations()]).
 #'   If `NULL`, it is downloaded.
 #' @param rain_pattern Regex identifying rainfall columns to sum. Default
@@ -372,6 +375,8 @@ get_township_weather <- function(start, end,
   # aggregation walks it to find `k_nearest` stations that actually have a value.
   pool <- if (is.null(pool_size)) {
     max(30L, 3L * as.integer(k_nearest))
+  } else if (is.infinite(pool_size)) {
+    Inf
   } else {
     max(as.integer(pool_size), as.integer(k_nearest))
   }
@@ -494,6 +499,8 @@ get_region_weather <- function(start, end,
 
   pool <- if (is.null(pool_size)) {
     max(30L, 3L * as.integer(k_nearest))
+  } else if (is.infinite(pool_size)) {
+    Inf
   } else {
     max(as.integer(pool_size), as.integer(k_nearest))
   }
@@ -573,7 +580,14 @@ get_region_weather <- function(start, end,
 # for get_township_weather(), `"region"` for get_region_weather().
 .tww_attach_region_pools <- function(regions, boundaries, stations, pool_size,
                                      key = "region") {
-  pool_size <- max(1L, as.integer(pool_size))
+  # `pool_size = Inf` means "rank every station" (full balance: a cell can always
+  # reach the nearest non-NA station, however far). head(order(d), n) then keeps
+  # all of them.
+  pool_size <- if (is.infinite(pool_size)) {
+    .Machine$integer.max
+  } else {
+    max(1L, as.integer(pool_size))
+  }
   has_xy <- !is.na(stations$lon) & !is.na(stations$lat)
   spts <- if (any(has_xy)) {
     sf::st_as_sf(stations[has_xy, , drop = FALSE],
@@ -630,79 +644,90 @@ get_region_weather <- function(start, end,
     if (!is.null(agg_fun[[col]])) return(match.fun(agg_fun[[col]]))
     if (is_rain[match(col, num_cols)]) sum else mean
   }
-  finalize <- function(r) {
-    if (length(r) != 1L || is.na(r) || is.nan(r) || is.infinite(r)) {
-      NA_real_
-    } else {
-      r
-    }
-  }
-  # Guard the row assembly: every value handed to data.frame() must be exactly
-  # length 1, otherwise data.frame() aborts with "arguments imply differing
-  # number of rows" (a length-0 cell -> "1, 0"). reduce_cell()/reduce_fallback()
-  # already aim for scalars, but a degenerate column or an unmatched id label can
-  # still surface an empty value; coerce anything non-scalar to a single value.
-  scalar1 <- function(x) {
-    if (is.null(x) || length(x) == 0L) return(NA)
-    if (length(x) > 1L) return(x[[1L]])
-    x
-  }
-  # Reduce all in-region rows for a column.
-  reduce_cell <- function(rows, col) {
-    if (length(rows) == 0L) return(NA_real_)
-    finalize(suppressWarnings(fun_for(col)(obs[[col]][rows], na.rm = TRUE)))
-  }
-  # Walk the distance-ordered fallback pool, taking one non-NA value per station
-  # until `k` stations contribute, then reduce them.
-  reduce_fallback <- function(ordered_ids, at_t, col) {
-    if (length(ordered_ids) == 0L) return(NA_real_)
-    vals <- numeric(0)
-    for (sid in ordered_ids) {
-      rows <- which(at_t & obs$station_id == sid)
-      if (length(rows) == 0L) next
-      v <- obs[[col]][rows]
-      v <- v[!is.na(v) & !is.nan(v) & is.finite(v)]
-      if (length(v) == 0L) next
-      vals <- c(vals, v[1L])          # this station's value at this time
-      if (length(vals) >= k) break
-    }
-    if (length(vals) == 0L) return(NA_real_)
-    finalize(suppressWarnings(fun_for(col)(vals, na.rm = TRUE)))
+  # Reduce a numeric vector to a single finite value, or NA. Always length 1.
+  reduce <- function(x, col) {
+    x <- x[is.finite(x)]
+    if (length(x) == 0L) return(NA_real_)
+    r <- suppressWarnings(fun_for(col)(x, na.rm = TRUE))
+    if (length(r) != 1L || !is.finite(r)) NA_real_ else r
   }
 
   times <- unique(obs$obs_time)
-  rows  <- list()
-  for (i in seq_len(nrow(regions))) {
-    in_ids   <- regions$in_ids[[i]]
-    near_ids <- regions$near_ids[[i]]
-    id_vals  <- stats::setNames(
-      lapply(id_cols, function(cc) regions[[cc]][i]), id_cols)
-    for (tv in times) {
-      at_t    <- !is.na(obs$obs_time) & obs$obs_time == tv
-      in_rows <- which(at_t & obs$station_id %in% in_ids)
+  times <- times[!is.na(times)]
+  nreg  <- nrow(regions)
+  nt    <- length(times)
+  ncell <- nreg * nt
 
-      vals <- vector("list", length(num_cols)); names(vals) <- num_cols
+  # An empty obs (or no regions/times) still returns the full set of columns so
+  # callers get a stable, zero-row schema instead of an error.
+  if (ncell == 0L) {
+    empty <- c(
+      stats::setNames(rep(list(character(0)), length(id_cols)), id_cols),
+      list(obs_time = character(0)),
+      stats::setNames(rep(list(numeric(0)), length(num_cols)), num_cols),
+      list(n_stations = integer(0), used_fallback = logical(0)))
+    return(do.call(data.frame,
+                   c(empty, list(check.names = FALSE, stringsAsFactors = FALSE))))
+  }
+
+  # Row indices of `obs` grouped by observation time, so each cell's lookup is a
+  # cheap subset rather than a full-table scan.
+  st       <- as.character(obs$station_id)
+  rows_by_t <- split(seq_len(nrow(obs)), match(obs$obs_time, times))
+
+  # Pre-allocate every output column at the final length. Building the data frame
+  # once from full-length vectors makes the old per-row data.frame() (and its
+  # "differing number of rows" failure mode) impossible.
+  out_id <- lapply(id_cols, function(cc) rep(as.character(regions[[cc]]),
+                                             each = nt))
+  names(out_id) <- id_cols
+  out_time <- rep(times, times = nreg)
+  out_val  <- stats::setNames(
+    lapply(num_cols, function(cc) rep(NA_real_, ncell)), num_cols)
+  out_n    <- integer(ncell)
+  out_fb   <- logical(ncell)
+
+  pos <- 0L
+  for (i in seq_len(nreg)) {
+    in_ids   <- as.character(regions$in_ids[[i]])
+    near_ids <- as.character(regions$near_ids[[i]])
+    for (ti in seq_len(nt)) {
+      pos     <- pos + 1L
+      rows_t  <- rows_by_t[[as.character(ti)]]
+      if (is.null(rows_t)) rows_t <- integer(0)
+      in_rows <- rows_t[st[rows_t] %in% in_ids]
+      out_n[pos] <- length(unique(st[in_rows]))
+
       fb <- FALSE
       for (col in num_cols) {
-        v <- reduce_cell(in_rows, col)
-        if (is.na(v)) {
-          v <- reduce_fallback(near_ids, at_t, col)
-          if (!is.na(v)) fb <- TRUE
+        v <- if (length(in_rows)) reduce(obs[[col]][in_rows], col) else NA_real_
+        if (is.na(v) && length(near_ids)) {
+          # Walk the distance-ordered fallback list, taking one finite value per
+          # station (nearest first) until `k` stations contribute, then reduce.
+          vals <- numeric(0)
+          for (sid in near_ids) {
+            r <- rows_t[st[rows_t] == sid]
+            if (!length(r)) next
+            xv <- obs[[col]][r]; xv <- xv[is.finite(xv)]
+            if (!length(xv)) next
+            vals <- c(vals, xv[1L])
+            if (length(vals) >= k) break
+          }
+          if (length(vals)) {
+            v <- reduce(vals, col)
+            if (!is.na(v)) fb <- TRUE
+          }
         }
-        vals[[col]] <- v
+        out_val[[col]][pos] <- v
       }
-      cols <- c(
-        lapply(id_vals, scalar1),
-        list(obs_time = scalar1(tv)),
-        lapply(vals, scalar1),
-        list(n_stations = as.integer(length(unique(obs$station_id[in_rows]))),
-             used_fallback = isTRUE(fb)))
-      rows[[length(rows) + 1L]] <-
-        do.call(data.frame,
-                c(cols, list(check.names = FALSE, stringsAsFactors = FALSE)))
+      out_fb[pos] <- fb
     }
   }
-  out <- do.call(rbind, rows)
+
+  out <- do.call(data.frame,
+                 c(out_id, list(obs_time = out_time), out_val,
+                   list(n_stations = out_n, used_fallback = out_fb),
+                   list(check.names = FALSE, stringsAsFactors = FALSE)))
   ord <- do.call(order, c(lapply(id_cols, function(cc) out[[cc]]),
                           list(out$obs_time)))
   out <- out[ord, , drop = FALSE]
