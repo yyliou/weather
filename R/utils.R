@@ -82,11 +82,12 @@
   2 * R * asin(pmin(1, sqrt(a)))
 }
 
-# Last calendar day (YYYYMMDD) of the month that `yyyymmdd` falls in. The CWB
-# monthly endpoint only returns a month's record once the request window reaches
-# the end of that month, so get_weather() extends `end` to it (a 7-day January
-# window such as 20240101-20240107 otherwise comes back completely empty).
-.tww_month_end <- function(yyyymmdd) {
+# Last calendar day (YYYYMMDD string) of the month that `yyyymmdd` falls in. The
+# CWB monthly endpoint only returns a month's record once the request window
+# reaches the end of that month, so get_weather() extends `end` to it (a 7-day
+# January window such as 20240101-20240107 otherwise comes back completely
+# empty). Distinct from panel.R's Date-valued `.tww_month_end()`.
+.tww_month_end_chr <- function(yyyymmdd) {
   d <- as.Date(yyyymmdd, format = "%Y%m%d")
   lt <- as.POSIXlt(d)
   lt$mday <- 1L

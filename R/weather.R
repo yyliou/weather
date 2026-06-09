@@ -71,7 +71,7 @@ get_weather <- function(station_id,
   # end of that month: a short window like 20240101-20240107 returns an empty
   # body, which silently propagates as all-NA. Extend `end` to its month end.
   if (type == "monthly") {
-    me <- .tww_month_end(end)
+    me <- .tww_month_end_chr(end)
     if (me > end) {
       if (!isTRUE(quiet)) {
         message("monthly: extended end date ", end, " -> ", me,

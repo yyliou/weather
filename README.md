@@ -100,13 +100,15 @@ dates default to `Operating` rather than dropping out of the plot.
 
 **Succession.** When a station is relocated / re-coded, its record is continued
 by a successor (e.g. 466880 板橋 → 466881 新北). With `succession = "auto"`
-(default), an operating station that took over from an older one is shown in a
-distinct colour by its place in the chain: gold for `Operating (successor 1)`,
-purple for `Operating (successor 2+)`. The links are read from `id_before` /
-`id_after` columns when present; the CODiS `station_list` feed doesn't expose
-them as fields, so by default they're inferred (conservatively) from the
-`remark` text — supply `id_before` / `id_after` yourself for full accuracy, or
-set `succession = "off"` for the plain three states.
+(default), a whole succession chain is **stacked onto one row**: the origin
+station's operating segment on the left (green), then each successor continuing
+to its right — gold for `Operating (successor 1)`, purple for
+`Operating (successor 2+)` — so the row reads as one continuous timeline. The
+links are read from `id_before` / `id_after` columns when present; the CODiS
+`station_list` feed doesn't expose them as fields, so by default they're
+inferred (conservatively) from the `remark` text. Supply `id_before` /
+`id_after` yourself for full accuracy, or set `succession = "off"` for the plain
+per-station three-state panel.
 
 ## 3. Measurement data
 

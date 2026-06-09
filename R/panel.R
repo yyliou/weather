@@ -111,42 +111,73 @@ station_panel <- function(stations = NULL,
   }
 
   periods <- .tww_seq_periods(start, end, by)
-  ns <- nrow(stations)
   np <- nrow(periods)
+  ps <- as.numeric(periods$p_start)
+  pe <- as.numeric(periods$p_end)
+  sid <- as.character(stations$station_id)
 
-  # Cell grid: stations vary fastest within each period.
-  idx_s <- rep.int(seq_len(ns), times = np)
-  idx_p <- rep(seq_len(np), each = ns)
-
-  est_c <- est[idx_s]
-  dec_c <- dec[idx_s]
-  ps_c  <- periods$p_start[idx_p]
-  pe_c  <- periods$p_end[idx_p]
-
-  status <- rep(.tww_status_levels()[2], length(idx_s))   # "Operating"
-  status[!is.na(dec_c) & ps_c > dec_c] <- .tww_status_levels()[3]  # "Decommissioned"
-  status[!is.na(est_c) & pe_c < est_c] <- .tww_status_levels()[1]  # "Not yet established"
-
-  # Succession: recolour an operating cell by how far the station sits down a
-  # relocation / re-coding chain (1st successor, 2nd-or-later successor).
-  use_succ <- FALSE
+  # Succession: chain depth (rank) and origin (root) per station. Members of one
+  # chain share a `root` so they stack onto a single row, with the predecessor's
+  # segment on the left and each successor's continuing to its right.
+  rank <- stats::setNames(integer(length(sid)), sid)
+  root <- stats::setNames(sid, sid)
   if (succession != "off") {
     st_s <- if (isTRUE(infer_remark)) .tww_infer_succession(stations) else stations
-    rk   <- .tww_succession_rank(st_s)[as.character(stations$station_id)][idx_s]
-    op   <- status == .tww_status_levels()[2] & !is.na(rk) & rk >= 1L
-    use_succ <- any(op)
-    if (use_succ) {
-      status[op & rk == 1L] <- "Operating (successor 1)"
-      status[op & rk >= 2L] <- "Operating (successor 2+)"
+    rank <- .tww_succession_rank(st_s)[sid]
+    root <- .tww_succession_root(st_s)[sid]
+  }
+  use_succ <- any(!is.na(rank) & rank >= 1L)
+  unit <- if (use_succ) unname(root) else sid
+
+  # Open-ended dates: unknown set-up = "before the window", unknown
+  # decommission = "still operating".
+  est_n <- as.numeric(est); est_n[is.na(est_n)] <- -Inf
+  dec_n <- as.numeric(dec); dec_n[is.na(dec_n)] <-  Inf
+
+  units   <- unique(unit)
+  nu      <- length(units)
+  op_lvl  <- .tww_status_levels()[2]
+  not_lvl <- .tww_status_levels()[1]
+  dec_lvl <- .tww_status_levels()[3]
+  # representative metadata per unit = its origin (lowest-rank) member.
+  rep_idx <- vapply(units, function(u) {
+    m <- which(unit == u); m[which.min(rank[m])]
+  }, integer(1))
+
+  # status of each unit (row) in each period (column).
+  status_mat <- matrix(not_lvl, nu, np)
+  for (ui in seq_len(nu)) {
+    m  <- which(unit == units[ui])
+    me <- est_n[m]; md <- dec_n[m]; mr <- rank[m]
+    operating <- outer(ps, md, `<=`) & outer(pe, me, `>=`)  # np x |members|
+    earliest  <- min(me)
+    for (j in seq_len(np)) {
+      om <- which(operating[j, ])
+      if (length(om)) {
+        rk <- max(mr[om])                          # latest successor operating
+        status_mat[ui, j] <- if (rk <= 0L) op_lvl
+          else if (rk == 1L) "Operating (successor 1)"
+          else "Operating (successor 2+)"
+      } else if (pe[j] < earliest) {
+        status_mat[ui, j] <- not_lvl
+      } else {
+        status_mat[ui, j] <- dec_lvl
+      }
     }
   }
 
-  out <- data.frame(
-    station_id = as.character(stations$station_id)[idx_s],
-    stringsAsFactors = FALSE
-  )
-  if ("name" %in% names(stations))   out$name   <- as.character(stations$name)[idx_s]
-  if ("county" %in% names(stations)) out$county <- as.character(stations$county)[idx_s]
+  # units vary fastest within each period.
+  idx_u <- rep.int(seq_len(nu), times = np)
+  idx_p <- rep(seq_len(np), each = nu)
+  status <- status_mat[cbind(idx_u, idx_p)]
+
+  out <- data.frame(station_id = units[idx_u], stringsAsFactors = FALSE)
+  if ("name" %in% names(stations)) {
+    out$name <- as.character(stations$name)[rep_idx][idx_u]
+  }
+  if ("county" %in% names(stations)) {
+    out$county <- as.character(stations$county)[rep_idx][idx_u]
+  }
   out$time   <- periods$time[idx_p]
   out$period <- periods$label[idx_p]
   out$status <- factor(status, levels = .tww_status_levels(succession = use_succ))
@@ -328,11 +359,10 @@ utils::globalVariables(c("time", "station_id", "status"))
     .tww_status_levels(succession = TRUE))
 }
 
-# Predecessor -> successor chain depth per station. A station's rank is how many
-# stations precede it via `id_before` (the older code it took over) or, failing
-# that, via another station's `id_after`. 0 = original, 1 = first successor,
-# 2 = second successor, ... Returns an integer vector named by `station_id`.
-.tww_succession_rank <- function(stations) {
+# Predecessor map: pred[X] = the station X took over from. Built from `id_before`
+# (the older code) and, where that is silent, the reverse of another station's
+# `id_after`. Returns a character vector named by `station_id` (NA = origin).
+.tww_pred_map <- function(stations) {
   ids  <- as.character(stations$station_id)
   pred <- stats::setNames(rep(NA_character_, length(ids)), ids)
   if ("id_before" %in% names(stations)) {
@@ -345,16 +375,42 @@ utils::globalVariables(c("time", "station_id", "status"))
     ok <- which(!is.na(a) & nzchar(a) & a %in% ids)
     for (i in ok) if (is.na(pred[[a[i]]])) pred[[a[i]]] <- ids[i]
   }
+  pred
+}
+
+# Chain depth per station: how many stations precede it. 0 = original,
+# 1 = first successor, 2 = second successor, ... Named by `station_id`.
+.tww_succession_rank <- function(stations) {
+  pred <- .tww_pred_map(stations)
+  ids  <- names(pred)
   rank <- stats::setNames(integer(length(ids)), ids)
   for (id in ids) {
     r <- 0L; cur <- pred[[id]]; seen <- character(0)
     while (!is.na(cur) && nzchar(cur) && !(cur %in% seen) && r < 50L) {
       r <- r + 1L; seen <- c(seen, cur)
-      cur <- if (cur %in% names(pred)) pred[[cur]] else NA_character_
+      cur <- if (cur %in% ids) pred[[cur]] else NA_character_
     }
     rank[[id]] <- r
   }
   rank
+}
+
+# Origin (rank-0) station of each station's succession chain, so all members of
+# a chain share one `root` and can be stacked on a single panel row. Named by
+# `station_id`; a station with no predecessor is its own root.
+.tww_succession_root <- function(stations) {
+  pred <- .tww_pred_map(stations)
+  ids  <- names(pred)
+  root <- stats::setNames(ids, ids)
+  for (id in ids) {
+    cur <- id; seen <- character(0)
+    while (cur %in% ids && !is.na(pred[[cur]]) && nzchar(pred[[cur]]) &&
+           !(pred[[cur]] %in% seen) && length(seen) < 50L) {
+      seen <- c(seen, cur); cur <- pred[[cur]]
+    }
+    root[[id]] <- cur
+  }
+  root
 }
 
 # Best-effort inference of `id_before` / `id_after` from the free-text `remark`,
@@ -459,16 +515,13 @@ utils::globalVariables(c("time", "station_id", "status"))
              label = label, stringsAsFactors = FALSE)
 }
 
-# Last calendar day of the month containing each date in `d`.
+# Last calendar day of the month containing each date in `d` (Date in, Date out,
+# vectorised). Distinct from utils.R's string-valued `.tww_month_end_chr()`.
 .tww_month_end <- function(d) {
-  nextm <- as.Date(cut(d, "month")) # first of this month (robust)
-  # add one month, then step back a day
-  y <- as.integer(format(nextm, "%Y"))
-  m <- as.integer(format(nextm, "%m"))
-  m2 <- m + 1L
-  y2 <- y + (m2 > 12L)
-  m2 <- ((m2 - 1L) %% 12L) + 1L
-  as.Date(sprintf("%04d-%02d-01", y2, m2)) - 1L
+  lt <- as.POSIXlt(as.Date(d))
+  lt$mday <- 1L
+  lt$mon  <- lt$mon + 1L
+  as.Date(lt) - 1
 }
 
 # Approximate tile width (in days) so tiles abut along a Date x axis.

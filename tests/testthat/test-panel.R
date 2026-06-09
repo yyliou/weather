@@ -91,7 +91,7 @@ test_that("succession rank follows the id_before chain", {
   expect_equal(unname(rk[c("OLD", "NEW1", "NEW2", "SOLO")]), c(0L, 1L, 2L, 0L))
 })
 
-test_that("succession recolours successor stations by chain depth", {
+test_that("a succession chain stacks onto one row, coloured by depth", {
   st <- data.frame(
     station_id = c("OLD", "NEW1", "NEW2"),
     start_date = as.Date(c("2000-01-01", "2010-01-01", "2020-01-01")),
@@ -99,10 +99,13 @@ test_that("succession recolours successor stations by chain depth", {
     id_before  = c(NA, "OLD", "NEW1"),
     stringsAsFactors = FALSE)
   p <- station_panel(st, "2000-01-01", "2024-12-31", by = "year")
+  # the three stations collapse to a single chain row keyed by the origin
+  expect_setequal(unique(p$station_id), "OLD")
+  expect_equal(nrow(p), 25L)                                   # 1 chain x 25y
   expect_true(any(grepl("successor", levels(p$status))))
-  expect_equal(stat(p, "OLD",  "2005"), "Operating")                  # original
-  expect_equal(stat(p, "NEW1", "2015"), "Operating (successor 1)")    # 1st
-  expect_equal(stat(p, "NEW2", "2021"), "Operating (successor 2+)")   # 2nd
+  expect_equal(stat(p, "OLD", "2005"), "Operating")                  # OLD segment
+  expect_equal(stat(p, "OLD", "2015"), "Operating (successor 1)")    # NEW1 to its right
+  expect_equal(stat(p, "OLD", "2021"), "Operating (successor 2+)")   # NEW2 further right
 })
 
 test_that("plain panel without succession keeps the three base levels", {
