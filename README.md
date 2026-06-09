@@ -9,12 +9,11 @@ The package gives you these functions:
 | Function | Purpose |
 |---|---|
 | `get_stations()` | 測站基本資料 — station metadata (id, name, lon/lat, county) |
-| `get_weather()` | 測量資料 — station observation time series (hourly / daily / monthly) |
-| `get_region_weather()` | 內插到任意多邊形 — interpolate weather to **any polygons you supply** (inverse-distance weighting), keyed by one id column |
-| `get_township_weather()` | 內插到鄉鎮 — convenience wrapper of `get_region_weather()` for the official township layer (keyed on `townid`) |
-| `load_tw_townships()` | 鄉鎮界線 — download / read the official NLSC township boundary layer as an `sf` object |
-| `assign_township()` | 測站歸屬鄉鎮 — tag each station with the township polygon it falls in |
 | `station_panel()` / `plot_station_panel()` | 營運狀態面板 — panelview-style station operating-status panel (Not yet established / Operating / Decommissioned) over a time window |
+| `assign_township()` | 測站歸屬鄉鎮 — tag each station with the township polygon it falls in |
+| `load_tw_townships()` | 鄉鎮界線 — download / read the official NLSC township boundary layer as an `sf` object |
+| `get_weather()` | 測量資料 — station observation time series (hourly / daily / monthly) |
+| `get_region_weather()` | 內插法 — interpolate weather to **any polygons you supply** by inverse-distance weighting, keyed by one id column |
 
 ## Install
 
@@ -23,8 +22,9 @@ The package gives you these functions:
 remotes::install_github("yyliou/weather")
 ```
 
-Core functions need only `jsonlite`. The township function additionally needs
-`sf` (`install.packages("sf")`).
+Core functions need only `jsonlite`. The interpolation and boundary helpers
+(`get_region_weather()`, `load_tw_townships()`, `assign_township()`) additionally
+need `sf` (`install.packages("sf")`). Installing `data.table` speeds up parsing.
 
 The functions carry roxygen comments but the `man/*.Rd` help pages aren't
 checked in. To build them (and pass `R CMD check`), run once:
@@ -121,12 +121,9 @@ wd <- get_weather(c("466920", "466930"), "2024-01-01", "2024-01-31", type = "dai
 
 ## 4. Interpolate to any polygons
 
-One engine interpolates weather to **whatever polygons you give it**.
-`get_region_weather()` is the general function; **`get_township_weather()` is
-just a convenience wrapper** for the official township layer (a special case: it
-keys on `townid` and adds the `county` / `township` name columns). Same
-algorithm, same options (`power` / `k_nearest` / `max_dist` / `pool_size` /
-`obs=`).
+`get_region_weather()` interpolates weather to **whatever polygons you give it** —
+townships, a custom grid, watersheds, anything. You pass the geometry (`shp`) and
+name the column that labels each polygon (`id_field`).
 
 For every *polygon × time step × variable* the value is the **pure
 inverse-distance-weighted (IDW)** mean of the `k_nearest` stations that report
@@ -158,29 +155,25 @@ obs <- get_weather(stations$station_id, "2024-01-01", "2024-01-07",
 
 ### Example A — Taiwan townships
 
+Load the official boundary layer and key on its township **code** column:
+
 ```r
 bnd <- load_tw_townships()          # official NLSC 鄉鎮市區界線 (data.gov.tw 7441)
 
 # step 2 — interpolate to every township (re-run freely, no re-download)
-tw <- get_township_weather(
+tw <- get_region_weather(
   start = "2024-01-01", end = "2024-01-07", type = "daily",
-  boundaries = bnd, stations = stations, obs = obs,
+  shp = bnd, id_field = "townid",   # or "TOWNNAME" if you want the name
+  stations = stations, obs = obs,
   power = 2, k_nearest = 8, max_dist = NULL
 )
-# townid = c("66000040", "66000050") restricts to a few districts.
-
-# the same thing via the general function (keyed on any column you choose):
-tw2 <- get_region_weather(
-  start = "2024-01-01", end = "2024-01-07", type = "daily",
-  shp = bnd, id_field = "townid",   # or "TOWNNAME", "COUNTYNAME", ...
-  stations = stations, obs = obs
-)
+# regions = c("66000040", "66000050") restricts to a few districts.
 ```
 
-Output: `townid`, `county`, `township`, `obs_time`, one column per interpolated
-variable, and `n_stations` (nearby stations reporting at that step). `townid` is
-the unambiguous key — district *names* repeat across Taiwan (中山區 is in both
-臺北市 and 基隆市), so the wrapper keys on the code.
+Key on `townid` rather than the name: district *names* repeat across Taiwan
+(中山區 is in both 臺北市 and 基隆市), whereas the code is unique. Output:
+`region` (the `townid` values), `obs_time`, one column per interpolated variable,
+and `n_stations` (nearby stations reporting at that step).
 
 ### Example B — a 200 km² hexagonal grid (main island only)
 
@@ -227,8 +220,9 @@ is downloading and parsing the station CSVs, so:
   installed, CSV parsing uses `data.table::fread`; otherwise a base-R parser is
   used. Just `install.packages("data.table")`.
 - **Download once, reuse via `obs=`.** Fetch `obs` once (optionally `saveRDS()`),
-  then call either function as many times as you like with `stations=`/`obs=` —
-  use the **same `stations`** table you built `obs` from so coordinates line up.
+  then call `get_region_weather()` as many times as you like with
+  `stations=`/`obs=` — use the **same `stations`** table you built `obs` from so
+  coordinates line up.
 
 > **monthly note** — for `type = "monthly"` the end date is automatically
 > extended to the end of its month, because the source returns a month's record

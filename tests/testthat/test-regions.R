@@ -84,15 +84,13 @@ test_that(".tww_standardise_region errors on a missing id_field", {
   expect_error(.tww_standardise_region(shp, "nope"), "not a column")
 })
 
-test_that("get_township_weather runs offline when stations and obs are given", {
+test_that("get_region_weather runs offline when stations and obs are given", {
   testthat::skip_if_not_installed("sf")
   sq <- function(x0) sf::st_polygon(list(rbind(
     c(x0, 0), c(x0 + 1, 0), c(x0 + 1, 1), c(x0, 1), c(x0, 0))))
   bnd <- sf::st_sf(
-    TOWNNAME   = c("左區", "右區"),
-    COUNTYNAME = c("臺中市", "臺中市"),
-    TOWNID     = c("L01", "R01"),
-    geometry   = sf::st_sfc(sq(0), sq(2), crs = 4326)
+    TOWNID   = c("L01", "R01"),
+    geometry = sf::st_sfc(sq(0), sq(2), crs = 4326)
   )
   stations <- data.frame(
     station_id = c("A", "B"), name = c("a", "b"),
@@ -105,30 +103,29 @@ test_that("get_township_weather runs offline when stations and obs are given", {
     `氣溫(℃)`    = c(18, 16, 20, 22),
     check.names = FALSE, stringsAsFactors = FALSE
   )
-  tw <- get_township_weather(
+  rw <- get_region_weather(
     start = "2024-01-01", end = "2024-01-02", type = "daily",
-    boundaries = bnd, stations = stations, obs = obs, k_nearest = 1)
+    shp = bnd, id_field = "TOWNID", stations = stations, obs = obs, k_nearest = 1)
 
-  expect_equal(nrow(tw), 4L)                       # 2 townships x 2 days
-  expect_setequal(tw$townid, c("L01", "R01"))
-  # k_nearest = 1 -> each township takes its single nearest station
-  l1 <- tw[tw$townid == "L01" & tw$obs_time == "2024-01-01", ]
+  expect_equal(nrow(rw), 4L)                       # 2 regions x 2 days
+  expect_setequal(rw$region, c("L01", "R01"))
+  # k_nearest = 1 -> each region takes its single nearest station
+  l1 <- rw[rw$region == "L01" & rw$obs_time == "2024-01-01", ]
   expect_equal(l1[["氣溫(℃)"]], 18)                # nearest to L01 is A
-  r2 <- tw[tw$townid == "R01" & tw$obs_time == "2024-01-02", ]
+  r2 <- rw[rw$region == "R01" & rw$obs_time == "2024-01-02", ]
   expect_equal(r2[["氣溫(℃)"]], 22)                # nearest to R01 is B
 })
 
-test_that("get_township_weather rejects a malformed obs table", {
+test_that("get_region_weather rejects a malformed obs table", {
   testthat::skip_if_not_installed("sf")
   sq  <- sf::st_polygon(list(rbind(c(0, 0), c(1, 0), c(1, 1), c(0, 1), c(0, 0))))
-  bnd <- sf::st_sf(TOWNNAME = "左區", COUNTYNAME = "臺中市", TOWNID = "L01",
-                   geometry = sf::st_sfc(sq, crs = 4326))
+  bnd <- sf::st_sf(site = "L01", geometry = sf::st_sfc(sq, crs = 4326))
   stations <- data.frame(station_id = "A", name = "a", lon = 0.5, lat = 0.5,
                          stringsAsFactors = FALSE)
   bad <- data.frame(id = "A", temp = 1)            # missing station_id/obs_time
   expect_error(
-    get_township_weather(start = "2024-01-01", end = "2024-01-02",
-                         type = "daily", boundaries = bnd,
-                         stations = stations, obs = bad),
+    get_region_weather(start = "2024-01-01", end = "2024-01-02",
+                       type = "daily", shp = bnd, id_field = "site",
+                       stations = stations, obs = bad),
     "must be a data frame from get_weather")
 })

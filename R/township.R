@@ -36,8 +36,8 @@
 #'
 #' @return An \pkg{sf} data frame with (at least) `township`, `county` and a
 #'   geometry column, in EPSG:4326. When the source carries a township-code
-#'   field (`TOWNID` / `TOWNCODE`), it is kept as `townid` — the key
-#'   [get_township_weather()] selects and aggregates on.
+#'   field (`TOWNID` / `TOWNCODE`), it is kept as `townid` — a convenient,
+#'   unambiguous column to pass as `id_field` to [get_region_weather()].
 #' @export
 load_tw_townships <- function(source = NULL,
                               town_field = NULL,
@@ -147,7 +147,7 @@ load_tw_townships <- function(source = NULL,
                "name", "t_uname"))
   cf <- pick(county_field,
              c("county", "countyname", "c_name", "county_name", "cn"))
-  # The official township code get_township_weather() selects and aggregates on.
+  # The official township code, kept as `townid` for use as an `id_field`.
   # On the NLSC layer two code columns coexist: TOWNCODE is the 8-digit
   # administrative code (e.g. "66000040" = 臺中市北屯區) while TOWNID is a short
   # internal id (e.g. "T07"). The docs, examples and the `townid=` filter all use
@@ -234,221 +234,66 @@ assign_township <- function(stations, boundaries) {
   stations
 }
 
-#' Interpolate weather to township level (inverse-distance weighting)
+#' Interpolate weather to any polygons (inverse-distance weighting)
 #'
-#' Estimates each township's weather by **pure spatial interpolation**: for every
-#' township, time step and variable the value is the inverse-distance-weighted
+#' Estimates each polygon's weather by **pure spatial interpolation**. You supply
+#' your own boundary polygons (any source [sf::st_read()] can read — a shapefile,
+#' GeoPackage, GeoJSON, a zipped shapefile, local or URL — or an already-loaded
+#' \pkg{sf} object) and name the column that identifies each region. For every
+#' region, time step and variable the value is the inverse-distance-weighted
 #' (IDW) mean of the `k_nearest` stations that report it:
 #' \deqn{v = \frac{\sum_i w_i x_i}{\sum_i w_i}, \qquad w_i = 1 / d_i^{power}}
-#' where \eqn{d_i} is the great-circle distance from the township's
-#' representative point to station \eqn{i}. Every numeric variable — rainfall
-#' included — is interpolated; nothing is averaged over a township's own
-#' stations (a station sitting on the representative point is used directly, so
-#' nearby stations still dominate naturally).
+#' where \eqn{d_i} is the great-circle distance from the region's representative
+#' point to station \eqn{i}. Every numeric variable — rainfall included — is
+#' interpolated; nothing is averaged (a station on the representative point is
+#' used directly, so nearby stations still dominate). A cell is `NA` only when no
+#' station within range reports the variable at that time.
 #'
-#' Recommended as **two steps**: first download the measurement data once with
-#' [get_weather()], then pass it here via `obs=` to interpolate (optionally many
-#' times, for different `townid` subsets or settings) without re-downloading. If
-#' `obs` is omitted, the nearest `pool_size` stations to each township are
-#' downloaded automatically.
-#'
-#' Townships are identified by their official township code, `townid` (the
-#' `TOWNID` / `TOWNCODE` field on the NLSC layer): a single unique key that
-#' sidesteps repeated district *names* (中山區 is in both 臺北市 and 基隆市). The
-#' `boundaries` layer must therefore carry a township-code column;
-#' [load_tw_townships()] keeps it automatically.
+#' Recommended as **two steps**: download the measurement data once with
+#' [get_weather()], then pass it via `obs=` to interpolate (optionally many
+#' times, for different `regions` or settings) without re-downloading. If `obs`
+#' is omitted, the nearest `pool_size` stations to each region are downloaded
+#' automatically. To aggregate to the official township layer, pass it as `shp`
+#' with `id_field = "townid"` (or `"TOWNNAME"`); see [load_tw_townships()].
 #'
 #' @param start,end,type Passed to [get_weather()] when `obs` is not supplied.
 #'   For `type = "monthly"` the end date is automatically extended to the end of
 #'   its month, since the source only returns a month's record once the window
 #'   reaches it.
-#' @param boundaries Township boundaries: an \pkg{sf} object from
-#'   [load_tw_townships()], or a path/URL it can read. Must include a township
-#'   code column (`TOWNID` / `TOWNCODE`, kept as `townid`).
-#' @param townid Optional character vector of township codes to keep
-#'   (e.g. `c("66000040", "66000050")`). `NULL` (default) returns every township
-#'   in `boundaries`.
+#' @param shp Your boundary polygons: an \pkg{sf} object, or a path/URL to a
+#'   shapefile / GeoPackage / GeoJSON / zipped shapefile.
+#' @param id_field Name of the column in `shp` that identifies each region
+#'   (e.g. `"VILLNAME"`, `"site"`, `"basin_id"`, `"townid"`). Its values become
+#'   the `region` column of the output. Polygons sharing an `id_field` value are
+#'   treated as one region (their geometries are unioned for the point lookup).
+#' @param regions Optional character vector of `id_field` values to keep. `NULL`
+#'   (default) returns every region in `shp`.
 #' @param power IDW distance exponent. Higher values give nearer stations more
 #'   relative weight. Default `2`.
 #' @param k_nearest Number of nearest stations (with a value for that variable at
 #'   that time) blended for each cell. Default `8`.
 #' @param max_dist Optional cap (in **kilometres**) on how far a contributing
-#'   station may be from the township. Stations beyond it are ignored; a cell
-#'   with no station within range is `NA`. `NULL` (default) imposes no cap.
-#' @param pool_size Number of nearest stations (per township) downloaded to
+#'   station may be from the region. Stations beyond it are ignored; a cell with
+#'   no station within range is `NA`. `NULL` (default) imposes no cap.
+#' @param pool_size Number of nearest stations (per region) downloaded to
 #'   interpolate from when `obs` is not supplied. `NULL` (default) uses
-#'   `max(30, 3 * k_nearest)`. Larger values give more complete coverage but
-#'   download more. Ignored when `obs` is supplied.
+#'   `max(30, 3 * k_nearest)`. Ignored when `obs` is supplied.
 #' @param stations Optional pre-fetched station table (from [get_stations()]).
 #'   If `NULL`, it is downloaded.
 #' @param obs Optional pre-downloaded observations (a [get_weather()] result) to
 #'   interpolate from instead of downloading. When supplied, no network call is
 #'   made and the `pool_size` step is skipped. This is the recommended fast path
-#'   for repeated runs or many townships: download once (e.g. for every station),
-#'   optionally `saveRDS()` it, and pass it back here. Use the same `stations`
-#'   table you built `obs` from so coordinates line up.
-#' @param clean,na_codes,quiet Passed to [get_weather()].
-#'
-#' @return A data frame with `townid`, `county`, `township`, `obs_time`, one
-#'   column per interpolated variable, and `n_stations` (nearby stations
-#'   reporting at that time step). The IDW power is kept in the `power` attribute
-#'   and the source station ids in `stations`.
-#'
-#' @examples
-#' \dontrun{
-#' bnd <- load_tw_townships()                      # or a local shapefile
-#' # every township:
-#' tw_all <- get_township_weather(
-#'   start = "2024-01-01", end = "2024-01-07", type = "daily", boundaries = bnd
-#' )
-#' # just a couple of townships, selected by their townid codes:
-#' tw <- get_township_weather(
-#'   start = "2024-01-01", end = "2024-01-07", type = "daily",
-#'   boundaries = bnd, townid = c("66000040", "66000050")
-#' )
-#' }
-#' @export
-get_township_weather <- function(start, end,
-                                 type = c("hourly", "daily", "monthly"),
-                                 boundaries,
-                                 townid = NULL,
-                                 power = 2,
-                                 k_nearest = 8,
-                                 max_dist = NULL,
-                                 pool_size = NULL,
-                                 stations = NULL,
-                                 obs = NULL,
-                                 clean = TRUE,
-                                 na_codes = .tww_default_na_codes(),
-                                 quiet = TRUE) {
-  type <- match.arg(type)
-  .tww_need_sf()
-  if (missing(boundaries) || is.null(boundaries)) {
-    stop("`boundaries` is required to locate each township. ",
-         "Use load_tw_townships() or pass a shapefile/GeoJSON path.",
-         call. = FALSE)
-  }
-  if (!inherits(boundaries, "sf")) {
-    boundaries <- load_tw_townships(source = boundaries)
-  } else {
-    boundaries <- .tww_standardise_boundaries(boundaries, NULL, NULL)
-  }
-  if (!"townid" %in% names(boundaries)) {
-    stop("The boundary layer has no township-code column (TOWNID / TOWNCODE). ",
-         "get_township_weather() keys on `townid`; pass a layer that includes ",
-         "one, or use get_region_weather() with a custom `id_field`.",
-         call. = FALSE)
-  }
-
-  if (is.null(stations)) stations <- get_stations()
-  stations <- stations[is.finite(stations$lon) & is.finite(stations$lat), ,
-                       drop = FALSE]
-  if (nrow(stations) == 0L) {
-    stop("No stations with usable coordinates to interpolate from.",
-         call. = FALSE)
-  }
-
-  # townid -> county / township display labels, carried onto the output.
-  lab <- data.frame(
-    townid   = as.character(boundaries$townid),
-    county   = as.character(boundaries$county),
-    township = as.character(boundaries$township),
-    stringsAsFactors = FALSE
-  )
-  lab <- lab[!is.na(lab$townid) & nzchar(lab$townid), , drop = FALSE]
-  lab <- lab[!duplicated(lab$townid), , drop = FALSE]
-
-  # which townids must we return one row per time step for?
-  all_ids <- if (is.null(townid)) {
-    lab$townid
-  } else {
-    want <- as.character(townid)
-    miss <- setdiff(want, lab$townid)
-    if (length(miss)) {
-      warning("townid not found in boundaries: ", paste(miss, collapse = ", "),
-              call. = FALSE)
-    }
-    want[want %in% lab$townid]
-  }
-  all_ids <- all_ids[!is.na(all_ids) & nzchar(all_ids)]
-  if (length(all_ids) == 0L) {
-    stop("No matching township(s) for the requested `townid`.", call. = FALSE)
-  }
-
-  # one representative interior point per requested township
-  targets <- .tww_region_points(boundaries, key = "townid", ids = all_ids)
-  targets <- merge(targets, lab, by = "townid", all.x = TRUE, sort = FALSE)
-  targets <- targets[, c("townid", "county", "township", "lon", "lat"),
-                     drop = FALSE]
-
-  if (is.null(obs)) {
-    # download the nearest pool of stations to each township to interpolate from
-    pool <- if (is.null(pool_size)) {
-      max(30L, 3L * as.integer(k_nearest))
-    } else {
-      max(as.integer(pool_size), as.integer(k_nearest))
-    }
-    near_ids <- .tww_nearest_ids(targets, stations, pool)
-    need_ids <- unique(unlist(near_ids))
-    need_ids <- need_ids[!is.na(need_ids) & nzchar(need_ids)]
-    if (length(need_ids) == 0L) {
-      stop("No stations available for the requested township(s).", call. = FALSE)
-    }
-    obs <- get_weather(need_ids, start, end, type = type,
-                       clean = clean, na_codes = na_codes, quiet = quiet)
-  } else {
-    obs <- .tww_check_obs(obs)
-  }
-
-  out <- .tww_idw_interpolate(
-    obs, targets, stations,
-    id_cols   = c("townid", "county", "township"),
-    power     = power, k_nearest = k_nearest, max_dist = max_dist)
-
-  used <- unique(as.character(obs$station_id))
-  used <- used[!is.na(used) & nzchar(used)]
-  attr(out, "stations") <- stats::setNames(
-    used, stations$name[match(used, stations$station_id)])
-  attr(out, "type")  <- type
-  attr(out, "power") <- power
-  out
-}
-
-#' Interpolate weather over an arbitrary shapefile
-#'
-#' A general-purpose sibling of [get_township_weather()]: instead of the
-#' official township layer, you supply **your own** boundary polygons (any
-#' source [sf::st_read()] can read — a shapefile, GeoPackage, GeoJSON, a zipped
-#' shapefile, local or URL — or an already-loaded \pkg{sf} object) and name the
-#' column that identifies each region. Each region is interpolated from the
-#' `k_nearest` stations by inverse-distance weighting — exactly as in
-#' [get_township_weather()] (rainfall included), downloading the nearest pool of
-#' stations to each region when `obs` is not supplied.
-#'
-#' @param start,end,type Passed to [get_weather()]. For `type = "monthly"` the
-#'   end date is extended to the end of its month (see [get_township_weather()]).
-#' @param shp Your boundary polygons: an \pkg{sf} object, or a path/URL to a
-#'   shapefile / GeoPackage / GeoJSON / zipped shapefile.
-#' @param id_field Name of the column in `shp` that identifies each region
-#'   (e.g. `"VILLNAME"`, `"site"`, `"basin_id"`). Its values become the `region`
-#'   column of the output. Polygons sharing an `id_field` value are treated as
-#'   one region (their geometries are unioned for the point lookup).
-#' @param regions Optional character vector of `id_field` values to keep. `NULL`
-#'   (default) returns every region in `shp`.
-#' @param power,k_nearest,max_dist,pool_size IDW settings, as in
-#'   [get_township_weather()].
-#' @param stations Optional pre-fetched station table (from [get_stations()]).
-#'   If `NULL`, it is downloaded.
-#' @param obs Optional pre-downloaded observations (a [get_weather()] result) to
-#'   interpolate from instead of downloading, as in [get_township_weather()].
+#'   for repeated runs or many regions: download once (e.g. for every station),
+#'   optionally `saveRDS()` it, and pass it back. Use the same `stations` table
+#'   you built `obs` from so coordinates line up.
 #' @param clean,na_codes,quiet Passed to [get_weather()].
 #'
 #' @return A data frame with `region`, `obs_time`, one column per interpolated
 #'   variable, and `n_stations` (nearby stations reporting at that time step).
-#'   The power is kept in the `power` attribute and the source station ids in
+#'   The IDW power is kept in the `power` attribute and the source station ids in
 #'   `stations`.
 #'
-#' @seealso [get_township_weather()], [load_tw_townships()]
+#' @seealso [load_tw_townships()], [get_weather()]
 #'
 #' @examples
 #' \dontrun{
@@ -456,6 +301,13 @@ get_township_weather <- function(start, end,
 #' rw <- get_region_weather(
 #'   start = "2024-01-01", end = "2024-01-07", type = "daily",
 #'   shp = "my_regions.shp", id_field = "site_name"
+#' )
+#'
+#' # To townships: pass the official layer and key on its code column.
+#' bnd <- load_tw_townships()
+#' tw <- get_region_weather(
+#'   start = "2024-01-01", end = "2024-01-07", type = "daily",
+#'   shp = bnd, id_field = "townid"
 #' )
 #' }
 #' @export

@@ -4,7 +4,7 @@
 #' <https://codis.cwa.gov.tw/StationData> and returns it as a tidy data frame.
 #' This is the companion lookup table for [get_weather()]: it gives you each
 #' station's id, Chinese name and longitude/latitude, which is also what
-#' [get_township_weather()] uses to map stations to townships.
+#' [get_region_weather()] interpolates from.
 #'
 #' The CODiS feed groups stations by attribute (`cwb` 局屬氣象站, `agr`
 #' 農業氣象站, automatic and rainfall stations, ...). This function flattens all

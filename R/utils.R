@@ -248,8 +248,7 @@
 # Normalise observation-time strings to ISO. A bare YYYYMMDD becomes
 # YYYY-MM-DD and a bare YYYYMM becomes YYYY-MM; values that already carry
 # separators (e.g. "2024-01-01 01:00:00") are left untouched. This keeps the
-# date format consistent across get_weather(), get_township_weather() and
-# get_region_weather().
+# date format consistent across get_weather() and get_region_weather().
 .tww_iso_obs_time <- function(x) {
   if (!is.character(x)) x <- as.character(x)
   s <- trimws(x)
