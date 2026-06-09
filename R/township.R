@@ -284,6 +284,13 @@ assign_township <- function(stations, boundaries) {
 #'   more.
 #' @param stations Optional pre-fetched station table (from [get_stations()]).
 #'   If `NULL`, it is downloaded.
+#' @param obs Optional pre-downloaded observations (a [get_weather()] result) to
+#'   reuse instead of downloading. When supplied, no network call is made and the
+#'   download/`pool_size` step is skipped — average and gap-fill run directly on
+#'   `obs`. This is the fast path for repeated runs or many townships: download
+#'   once for all stations, save it (e.g. with `saveRDS()`), and pass it back
+#'   here. Use the same `stations` table you built `obs` from so coordinates
+#'   line up.
 #' @param clean,na_codes,quiet Passed to [get_weather()].
 #'
 #' @return A data frame with `townid`, `county`, `township`, `obs_time`, one
@@ -315,6 +322,7 @@ get_township_weather <- function(start, end,
                                  max_dist = NULL,
                                  pool_size = NULL,
                                  stations = NULL,
+                                 obs = NULL,
                                  clean = TRUE,
                                  na_codes = .tww_default_na_codes(),
                                  quiet = TRUE) {
@@ -380,25 +388,28 @@ get_township_weather <- function(start, end,
   targets <- targets[, c("townid", "county", "township", "lon", "lat"),
                      drop = FALSE]
 
-  # stations inside each township (averaged) plus a nearest pool to fill gaps
+  # stations inside each township feed the in-township average
   in_ids <- lapply(targets$townid, function(id)
     stations$station_id[!is.na(stations$townid) & stations$townid == id])
-  pool <- if (is.null(pool_size)) {
-    max(30L, 3L * as.integer(k_nearest))
+
+  if (is.null(obs)) {
+    # download only the in-township stations plus a nearest pool to fill gaps
+    pool <- if (is.null(pool_size)) {
+      max(30L, 3L * as.integer(k_nearest))
+    } else {
+      max(as.integer(pool_size), as.integer(k_nearest))
+    }
+    near_ids <- .tww_nearest_ids(targets, stations, pool)
+    need_ids <- unique(c(unlist(in_ids), unlist(near_ids)))
+    need_ids <- need_ids[!is.na(need_ids) & nzchar(need_ids)]
+    if (length(need_ids) == 0L) {
+      stop("No stations available for the requested township(s).", call. = FALSE)
+    }
+    obs <- get_weather(need_ids, start, end, type = type,
+                       clean = clean, na_codes = na_codes, quiet = quiet)
   } else {
-    max(as.integer(pool_size), as.integer(k_nearest))
+    obs <- .tww_check_obs(obs)
   }
-  near_ids <- .tww_nearest_ids(targets, stations, pool)
-
-  need_ids <- unique(c(unlist(in_ids), unlist(near_ids)))
-  need_ids <- need_ids[!is.na(need_ids) & nzchar(need_ids)]
-  if (length(need_ids) == 0L) {
-    stop("No stations available for the requested township(s).", call. = FALSE)
-  }
-
-  # download only the stations we need, then average + gap-fill in memory
-  obs <- get_weather(need_ids, start, end, type = type,
-                     clean = clean, na_codes = na_codes, quiet = quiet)
 
   out <- .tww_reduce_regions(
     obs, targets, stations,
@@ -441,6 +452,8 @@ get_township_weather <- function(start, end,
 #'   [get_township_weather()].
 #' @param stations Optional pre-fetched station table (from [get_stations()]).
 #'   If `NULL`, it is downloaded.
+#' @param obs Optional pre-downloaded observations (a [get_weather()] result) to
+#'   reuse instead of downloading, as in [get_township_weather()].
 #' @param clean,na_codes,quiet Passed to [get_weather()].
 #'
 #' @return A data frame with `region`, `obs_time`, one column per variable,
@@ -469,6 +482,7 @@ get_region_weather <- function(start, end,
                                max_dist = NULL,
                                pool_size = NULL,
                                stations = NULL,
+                               obs = NULL,
                                clean = TRUE,
                                na_codes = .tww_default_na_codes(),
                                quiet = TRUE) {
@@ -512,24 +526,27 @@ get_region_weather <- function(start, end,
 
   targets <- .tww_region_points(boundaries, key = "region", ids = all_regions)
 
-  # stations inside each region (averaged) plus a nearest pool to fill gaps
+  # stations inside each region feed the in-region average
   in_ids <- lapply(targets$region, function(id)
     stations$station_id[!is.na(stations$region) & stations$region == id])
-  pool <- if (is.null(pool_size)) {
-    max(30L, 3L * as.integer(k_nearest))
+
+  if (is.null(obs)) {
+    pool <- if (is.null(pool_size)) {
+      max(30L, 3L * as.integer(k_nearest))
+    } else {
+      max(as.integer(pool_size), as.integer(k_nearest))
+    }
+    near_ids <- .tww_nearest_ids(targets, stations, pool)
+    need_ids <- unique(c(unlist(in_ids), unlist(near_ids)))
+    need_ids <- need_ids[!is.na(need_ids) & nzchar(need_ids)]
+    if (length(need_ids) == 0L) {
+      stop("No stations available for the requested region(s).", call. = FALSE)
+    }
+    obs <- get_weather(need_ids, start, end, type = type,
+                       clean = clean, na_codes = na_codes, quiet = quiet)
   } else {
-    max(as.integer(pool_size), as.integer(k_nearest))
+    obs <- .tww_check_obs(obs)
   }
-  near_ids <- .tww_nearest_ids(targets, stations, pool)
-
-  need_ids <- unique(c(unlist(in_ids), unlist(near_ids)))
-  need_ids <- need_ids[!is.na(need_ids) & nzchar(need_ids)]
-  if (length(need_ids) == 0L) {
-    stop("No stations available for the requested region(s).", call. = FALSE)
-  }
-
-  obs <- get_weather(need_ids, start, end, type = type,
-                     clean = clean, na_codes = na_codes, quiet = quiet)
 
   out <- .tww_reduce_regions(
     obs, targets, stations,
@@ -788,6 +805,18 @@ get_region_weather <- function(start, end,
   out
 }
 
+
+# Validate a user-supplied `obs` table (from get_weather()) reused to skip the
+# download. It only needs the keys the reducer joins on; value columns are
+# whatever was downloaded.
+.tww_check_obs <- function(obs) {
+  if (!is.data.frame(obs) ||
+      !all(c("station_id", "obs_time") %in% names(obs))) {
+    stop("`obs` must be a data frame from get_weather() (with `station_id` and ",
+         "`obs_time` columns).", call. = FALSE)
+  }
+  obs
+}
 
 .tww_need_sf <- function() {
   if (!requireNamespace("sf", quietly = TRUE)) {

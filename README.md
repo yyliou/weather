@@ -203,6 +203,40 @@ st  <- get_stations()
 st  <- assign_township(st, bnd)            # adds township / county_geo / townid
 ```
 
+### Speeding up many townships
+
+For a few townships the download is small. For **all ~368**, the nearest pools
+overlap so much that you end up downloading almost every station anyway, and the
+time goes into downloading and parsing those CSVs — not the interpolation. Two
+levers:
+
+- **Faster parsing (automatic).** If the suggested [`data.table`](https://cran.r-project.org/package=data.table)
+  package is installed, CSV parsing uses `data.table::fread` (much faster on the
+  wide feed); otherwise a base-R parser is used. Nothing to configure —
+  `install.packages("data.table")` and the first run is quicker.
+- **Download once, reuse via `obs=`.** Boundaries and historical observations
+  don't change, so fetch the data once, cache it, and pass it back. Subsequent
+  runs (different `townid` subsets, `power`, `k_nearest`, …) skip the network
+  entirely:
+
+  ```r
+  stations <- get_stations()
+  # one download covering every station you might need:
+  obs <- get_weather(stations$station_id, "2024-01-01", "2024-01-07",
+                     type = "daily")
+  saveRDS(list(stations = stations, obs = obs), "cwa_2024w1.rds")   # cache
+
+  # later / repeatedly — no download, runs in seconds:
+  cache <- readRDS("cwa_2024w1.rds")
+  tw <- get_township_weather(
+    start = "2024-01-01", end = "2024-01-07", type = "daily",
+    boundaries = bnd, stations = cache$stations, obs = cache$obs
+  )
+  ```
+
+  Pass the **same `stations`** table you built `obs` from so coordinates line
+  up. `get_region_weather()` takes `obs=` too.
+
 ## 5. Your own shapefile
 
 **The algorithm is exactly the same as section 4** (average inside each region,

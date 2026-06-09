@@ -18,5 +18,5 @@
     <line x1="104" y1="100" x2="100" y2="111"/>
   </g>
   <!-- name -->
-  <text x="86.5" y="148" text-anchor="middle" font-family="Palatino, 'Palatino Linotype', 'Book Antiqua', Georgia, serif" font-weight="bold" font-size="21" fill="#ffffff">twweather</text>
+  <text x="86.5" y="142" text-anchor="middle" font-family="Palatino, 'Palatino Linotype', 'Book Antiqua', Georgia, serif" font-weight="bold" font-size="26" fill="#ffffff">twweather</text>
 </svg>

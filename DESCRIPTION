@@ -24,6 +24,7 @@ Imports:
     jsonlite
 Suggests:
     sf,
+    data.table,
     ggplot2,
     testthat (>= 3.0.0)
 URL: https://mycolab.pp.nchu.edu.tw/historical_weather/index.php

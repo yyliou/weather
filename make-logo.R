@@ -45,7 +45,7 @@ sticker(
   s_x = 1, s_y = 0.95, s_width = 1.3, s_height = 0.9,
 
   package   = "twweather",
-  p_family  = "nunito", p_size = 18, p_y = 1.45, p_color = "#ffffff",
+  p_family  = "nunito", p_size = 22, p_y = 1.52, p_color = "#ffffff",
 
   h_fill    = "#2f6aa6",   # tidyverse-blue body
   h_color   = "#9fd0f5",   # light-blue border

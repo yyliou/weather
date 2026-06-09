@@ -85,3 +85,32 @@ test_that("an in-file station column is detected", {
                       check.names = FALSE, stringsAsFactors = FALSE)
   expect_true(is.na(.tww_station_col(plain)))
 })
+
+test_that(".tww_read_csv parses, normalises obs_time and cleans (fast or base)", {
+  f <- tempfile(fileext = ".csv")
+  on.exit(unlink(f), add = TRUE)
+  writeLines(c("觀測時間(hour),氣溫(℃),降水量(mm)",
+               "20240101,18.4,0.0",
+               "20240102,NA,1.5"), f, useBytes = TRUE)
+  df <- .tww_read_csv(f, .tww_default_na_codes(), clean = TRUE)
+  expect_equal(names(df)[1], "obs_time")
+  expect_equal(df$obs_time, c("2024-01-01", "2024-01-02"))
+  expect_true(is.numeric(df[["氣溫(℃)"]]))
+  expect_equal(df[["氣溫(℃)"]], c(18.4, NA))   # literal "NA" text -> NA
+  expect_equal(df[["降水量(mm)"]], c(0.0, 1.5))
+})
+
+test_that(".tww_read_csv returns an empty frame for a 'no data' notice", {
+  f <- tempfile(fileext = ".csv")
+  on.exit(unlink(f), add = TRUE)
+  writeLines("No data available for this station.", f)
+  expect_equal(nrow(.tww_read_csv(f, .tww_default_na_codes(), TRUE)), 0L)
+})
+
+test_that("fast path and base parser agree on the same input", {
+  f <- tempfile(fileext = ".csv")
+  on.exit(unlink(f), add = TRUE)
+  writeLines(c("obs,a,b", "20240101,1,2", "20240102,3,X"), f)  # X is an NA token
+  expect_equal(.tww_read_csv(f, .tww_default_na_codes(), TRUE),
+               .tww_read_csv_base(f, .tww_default_na_codes(), TRUE))
+})

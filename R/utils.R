@@ -159,15 +159,53 @@
 
 # Read one CWA observation CSV into a data.frame, tolerantly, cleaning sentinels.
 #
-# The feed has quirks that make base read.csv() abort with "arguments imply
-# differing number of rows": a UTF-8 BOM, CRLF endings, blank trailing lines,
-# and—crucially—when a station has no data in the requested window (e.g. a
-# decommissioned station such as 466880 板橋, retired 2022-12-31) the server
-# returns a short plain-text notice ("No data available ...") instead of a CSV.
-# We read raw lines, detect those non-CSV responses (returning an empty frame so
-# the station is simply dropped from the combined result), and otherwise split
-# into a rectangular frame ourselves so a ragged row can never crash the parse.
+# Parsing the many wide CSVs in a multi-station download is the slowest part of a
+# whole-country run, so when the (suggested) data.table package is installed we
+# parse with data.table::fread, which is far faster than base R for this shape.
+# The hand-rolled base-R splitter is kept as a fallback and is used whenever
+# data.table is absent or fread fails, so results are identical either way and
+# the package keeps no hard dependency.
+#
+# The feed has quirks both parsers tolerate: a UTF-8 BOM, CRLF endings, blank
+# trailing lines, ragged rows, and--crucially--when a station has no data in the
+# requested window (e.g. a decommissioned station such as 466880 板橋, retired
+# 2022-12-31) the server returns a short plain-text notice ("No data available
+# ...") instead of a CSV. Those notices are detected up front and return an empty
+# frame, so the station is simply dropped from the combined result.
 .tww_read_csv <- function(path, na_codes, clean) {
+  # Cheap peek: detect the non-CSV "no data" notice without reading the whole
+  # file. The notice is the entire (short) body, so the first few lines suffice.
+  peek <- tryCatch(readLines(path, n = 3L, warn = FALSE, encoding = "UTF-8"),
+                   error = function(e) character(0))
+  if (length(peek)) peek[1L] <- sub("^\uFEFF", "", peek[1L])
+  peek <- sub("\r$", "", peek)
+  peek <- peek[nzchar(trimws(peek))]
+  if (length(peek) < 2L || !grepl(",", peek[1L]) ||
+      any(grepl("no data|查無|無資料", peek, ignore.case = TRUE))) {
+    return(data.frame())
+  }
+
+  # Fast path: data.table::fread. Everything is read as character (na.strings =
+  # none) so .tww_clean() can apply the package's own sentinel/NA-token rules,
+  # exactly as the base path does. fill = TRUE tolerates ragged rows.
+  if (requireNamespace("data.table", quietly = TRUE)) {
+    df <- tryCatch(
+      data.table::fread(path, sep = ",", header = TRUE, fill = TRUE,
+                        colClasses = "character", na.strings = character(),
+                        showProgress = FALSE, data.table = FALSE,
+                        check.names = FALSE),
+      error = function(e) NULL)
+    if (!is.null(df) && ncol(df) >= 2L) {
+      return(.tww_finalise_csv(df, na_codes, clean))
+    }
+  }
+
+  .tww_read_csv_base(path, na_codes, clean)
+}
+
+# Base-R CSV reader (no dependencies). Reads raw lines and splits into a
+# rectangular frame so a ragged row can never crash the parse.
+.tww_read_csv_base <- function(path, na_codes, clean) {
   txt <- tryCatch(readLines(path, warn = FALSE, encoding = "UTF-8"),
                   error = function(e) character(0))
   if (length(txt)) txt[1L] <- sub("^\uFEFF", "", txt[1L])   # strip BOM
@@ -187,15 +225,18 @@
   mat    <- matrix(unlist(body, use.names = FALSE), ncol = nc, byrow = TRUE)
   df     <- as.data.frame(mat, stringsAsFactors = FALSE, check.names = FALSE)
   names(df) <- header
+  .tww_finalise_csv(df, na_codes, clean)
+}
+
+# Shared tail for both parsers: trim/unquote cells, rename the first column to
+# `obs_time`, normalise it to ISO, and (optionally) clean sentinels to NA.
+.tww_finalise_csv <- function(df, na_codes, clean) {
   df[] <- lapply(df, function(v) {
-    v <- trimws(v)
+    v <- trimws(as.character(v))
     v <- sub('^"(.*)"$', "\\1", v)   # strip any stray surrounding quotes
     v[v == ""] <- NA
     v
   })
-
-  # The first column is the observation time; rename it to `obs_time` and put it
-  # in a consistent ISO (YYYY-MM-DD / YYYY-MM) shape.
   names(df)[1L] <- "obs_time"
   df$obs_time <- .tww_iso_obs_time(df$obs_time)
   if (isTRUE(clean)) {

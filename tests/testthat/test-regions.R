@@ -83,3 +83,52 @@ test_that(".tww_standardise_region errors on a missing id_field", {
   shp <- sf::st_sf(site = "x", geometry = sf::st_sfc(sq, crs = 4326))
   expect_error(.tww_standardise_region(shp, "nope"), "not a column")
 })
+
+test_that("get_township_weather runs offline when stations and obs are given", {
+  testthat::skip_if_not_installed("sf")
+  sq <- function(x0) sf::st_polygon(list(rbind(
+    c(x0, 0), c(x0 + 1, 0), c(x0 + 1, 1), c(x0, 1), c(x0, 0))))
+  bnd <- sf::st_sf(
+    TOWNNAME   = c("左區", "右區"),
+    COUNTYNAME = c("臺中市", "臺中市"),
+    TOWNID     = c("L01", "R01"),
+    geometry   = sf::st_sfc(sq(0), sq(2), crs = 4326)
+  )
+  stations <- data.frame(
+    station_id = c("A", "B"), name = c("a", "b"),
+    lon = c(0.5, 2.5), lat = c(0.5, 0.5), stringsAsFactors = FALSE
+  )
+  # pre-downloaded observations -> no get_stations()/get_weather() network call
+  obs <- data.frame(
+    station_id = c("A", "A", "B", "B"),
+    obs_time   = c("2024-01-01", "2024-01-02", "2024-01-01", "2024-01-02"),
+    `氣溫(℃)`    = c(18, 16, 20, 22),
+    check.names = FALSE, stringsAsFactors = FALSE
+  )
+  tw <- get_township_weather(
+    start = "2024-01-01", end = "2024-01-02", type = "daily",
+    boundaries = bnd, stations = stations, obs = obs)
+
+  expect_equal(nrow(tw), 4L)                       # 2 townships x 2 days
+  expect_setequal(tw$townid, c("L01", "R01"))
+  expect_false(any(tw$used_fallback))              # each township has its own
+  l1 <- tw[tw$townid == "L01" & tw$obs_time == "2024-01-01", ]
+  expect_equal(l1[["氣溫(℃)"]], 18)                # station A inside L01
+  r2 <- tw[tw$townid == "R01" & tw$obs_time == "2024-01-02", ]
+  expect_equal(r2[["氣溫(℃)"]], 22)                # station B inside R01
+})
+
+test_that("get_township_weather rejects a malformed obs table", {
+  testthat::skip_if_not_installed("sf")
+  sq  <- sf::st_polygon(list(rbind(c(0, 0), c(1, 0), c(1, 1), c(0, 1), c(0, 0))))
+  bnd <- sf::st_sf(TOWNNAME = "左區", COUNTYNAME = "臺中市", TOWNID = "L01",
+                   geometry = sf::st_sfc(sq, crs = 4326))
+  stations <- data.frame(station_id = "A", name = "a", lon = 0.5, lat = 0.5,
+                         stringsAsFactors = FALSE)
+  bad <- data.frame(id = "A", temp = 1)            # missing station_id/obs_time
+  expect_error(
+    get_township_weather(start = "2024-01-01", end = "2024-01-02",
+                         type = "daily", boundaries = bnd,
+                         stations = stations, obs = bad),
+    "must be a data frame from get_weather")
+})
