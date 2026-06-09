@@ -115,6 +115,19 @@ test_that("fast path and base parser agree on the same input", {
                .tww_read_csv_base(f, .tww_default_na_codes(), TRUE))
 })
 
+test_that("trace precipitation (T / -9991) becomes 0, not NA", {
+  df <- data.frame(
+    obs_time     = c("2024-01-01", "2024-01-02", "2024-01-03"),
+    `降水量(mm)` = c("0.0", "T", "-9991"),
+    check.names = FALSE, stringsAsFactors = FALSE)
+  out <- .tww_clean(df, .tww_default_na_codes())
+  expect_equal(out[["降水量(mm)"]], c(0, 0, 0))
+  # but "T" in a non-precipitation column is still treated as missing
+  df2 <- data.frame(obs_time = "a", `氣溫(℃)` = "T",
+                    check.names = FALSE, stringsAsFactors = FALSE)
+  expect_true(is.na(.tww_clean(df2, .tww_default_na_codes())[["氣溫(℃)"]]))
+})
+
 test_that("negative rainfall / precip-hours sentinels are cleaned", {
   df <- data.frame(
     obs_time      = c("2024-01-01", "2024-01-02"),

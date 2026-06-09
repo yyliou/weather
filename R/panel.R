@@ -35,12 +35,26 @@
 #' @param active_only Logical. Only used when `stations = NULL`; passed to
 #'   [get_stations()]. Defaults to `FALSE` so decommissioned stations are kept
 #'   (otherwise the `"Decommissioned"` state can never appear).
+#' @param succession `"auto"` (default) or `"off"`. When `"auto"` and the
+#'   station table carries succession info, an operating station that has taken
+#'   over from an older, re-coded/relocated station is shown in a distinct state:
+#'   `"Operating (successor 1)"` for the first successor in a chain,
+#'   `"Operating (successor 2+)"` for the second-or-later. Succession is read
+#'   from `id_before` / `id_after` columns when present; otherwise it is inferred
+#'   from the `remark` text (see `infer_remark`). With no succession found, the
+#'   plain three states are used. Supply `id_before` / `id_after` yourself for
+#'   full control.
+#' @param infer_remark Logical. When `TRUE` (default) and `succession != "off"`,
+#'   missing `id_before` / `id_after` are inferred (conservatively) from the
+#'   `remark` text. Set `FALSE` to use only explicitly supplied succession
+#'   columns.
 #'
 #' @return A data frame with one row per station-by-period and columns
 #'   `station_id`, `name` (if available), `county` (if available), `time` (a
 #'   `Date` marking the start of the period), `period` (a label such as
-#'   `"2020"` or `"2020-03"`) and `status` (a factor with levels
-#'   `"Not yet established"`, `"Operating"`, `"Decommissioned"`). The
+#'   `"2020"` or `"2020-03"`) and `status` (a factor; levels are the three base
+#'   states, expanded with `"Operating (successor 1)"` /
+#'   `"Operating (successor 2+)"` when succession is detected). The
 #'   set-up / decommission dates are carried in `attr(x, "start_date")` and
 #'   `attr(x, "end_date")` (named by `station_id`) for sorting downstream.
 #'
@@ -61,8 +75,11 @@
 station_panel <- function(stations = NULL,
                           start, end,
                           by = c("year", "month", "day"),
-                          active_only = FALSE) {
-  by <- match.arg(by)
+                          active_only = FALSE,
+                          succession = c("auto", "off"),
+                          infer_remark = TRUE) {
+  by         <- match.arg(by)
+  succession <- match.arg(succession)
 
   if (is.null(stations)) {
     stations <- get_stations(active_only = active_only)
@@ -110,6 +127,20 @@ station_panel <- function(stations = NULL,
   status[!is.na(dec_c) & ps_c > dec_c] <- .tww_status_levels()[3]  # "Decommissioned"
   status[!is.na(est_c) & pe_c < est_c] <- .tww_status_levels()[1]  # "Not yet established"
 
+  # Succession: recolour an operating cell by how far the station sits down a
+  # relocation / re-coding chain (1st successor, 2nd-or-later successor).
+  use_succ <- FALSE
+  if (succession != "off") {
+    st_s <- if (isTRUE(infer_remark)) .tww_infer_succession(stations) else stations
+    rk   <- .tww_succession_rank(st_s)[as.character(stations$station_id)][idx_s]
+    op   <- status == .tww_status_levels()[2] & !is.na(rk) & rk >= 1L
+    use_succ <- any(op)
+    if (use_succ) {
+      status[op & rk == 1L] <- "Operating (successor 1)"
+      status[op & rk >= 2L] <- "Operating (successor 2+)"
+    }
+  }
+
   out <- data.frame(
     station_id = as.character(stations$station_id)[idx_s],
     stringsAsFactors = FALSE
@@ -118,9 +149,10 @@ station_panel <- function(stations = NULL,
   if ("county" %in% names(stations)) out$county <- as.character(stations$county)[idx_s]
   out$time   <- periods$time[idx_p]
   out$period <- periods$label[idx_p]
-  out$status <- factor(status, levels = .tww_status_levels())
+  out$status <- factor(status, levels = .tww_status_levels(succession = use_succ))
 
   # Carry per-station dates for sorting in plot_station_panel().
+  attr(out, "succession") <- use_succ
   attr(out, "start_date") <- stats::setNames(est, as.character(stations$station_id))
   attr(out, "end_date")   <- stats::setNames(dec, as.character(stations$station_id))
   attr(out, "by")    <- by
@@ -216,7 +248,10 @@ plot_station_panel <- function(x = NULL,
     stop("`panel` has no `status` column; was it built by station_panel()?",
          call. = FALSE)
   }
-  panel$status <- factor(panel$status, levels = .tww_status_levels())
+  succ <- isTRUE(attr(panel, "succession")) ||
+    any(grepl("successor", as.character(panel$status)))
+  panel$status <- factor(panel$status,
+                         levels = .tww_status_levels(succession = succ))
 
   # Order stations on the y axis.
   ord <- .tww_station_order(panel, sort)
@@ -248,7 +283,7 @@ plot_station_panel <- function(x = NULL,
   gg <- gg +
     ggplot2::geom_tile(width = tile_w, height = 0.95,
                        colour = "white", linewidth = 0.05) +
-    ggplot2::scale_fill_manual(values = colors, drop = FALSE,
+    ggplot2::scale_fill_manual(values = colors, drop = TRUE,
                                name = NULL) +
     ggplot2::labs(title = title, x = xlab, y = ylab) +
     ggplot2::theme_minimal(base_size = 11) +
@@ -272,14 +307,97 @@ utils::globalVariables(c("time", "station_id", "status"))
 
 # Internal helpers ------------------------------------------------------------
 
-# The three status levels, in display order (not set up -> operating -> gone).
-.tww_status_levels <- function() {
-  c("Not yet established", "Operating", "Decommissioned")
+# Status levels, in display order. Without succession: not set up -> operating
+# -> gone. With succession, "Operating" splits by how far down a relocation /
+# re-coding chain the station sits (1st successor, 2nd-or-later successor).
+.tww_status_levels <- function(succession = FALSE) {
+  if (!succession) {
+    return(c("Not yet established", "Operating", "Decommissioned"))
+  }
+  c("Not yet established", "Operating",
+    "Operating (successor 1)", "Operating (successor 2+)",
+    "Decommissioned")
 }
 
-# Default fill palette: grey (not yet) / green (operating) / red (gone).
+# Default fill palette: grey (not yet) / green (operating) / gold (1st
+# successor) / purple (2nd+ successor) / red (gone). Named by level, so a plain
+# three-state panel uses the matching subset.
 .tww_status_colors <- function() {
-  stats::setNames(c("grey88", "#4DAC60", "#C0444B"), .tww_status_levels())
+  stats::setNames(
+    c("grey88", "#4DAC60", "#E8B500", "#7B5EA7", "#C0444B"),
+    .tww_status_levels(succession = TRUE))
+}
+
+# Predecessor -> successor chain depth per station. A station's rank is how many
+# stations precede it via `id_before` (the older code it took over) or, failing
+# that, via another station's `id_after`. 0 = original, 1 = first successor,
+# 2 = second successor, ... Returns an integer vector named by `station_id`.
+.tww_succession_rank <- function(stations) {
+  ids  <- as.character(stations$station_id)
+  pred <- stats::setNames(rep(NA_character_, length(ids)), ids)
+  if ("id_before" %in% names(stations)) {
+    b  <- as.character(stations$id_before)
+    ok <- !is.na(b) & nzchar(b) & b %in% ids
+    pred[ids[ok]] <- b[ok]
+  }
+  if ("id_after" %in% names(stations)) {
+    a  <- as.character(stations$id_after)
+    ok <- which(!is.na(a) & nzchar(a) & a %in% ids)
+    for (i in ok) if (is.na(pred[[a[i]]])) pred[[a[i]]] <- ids[i]
+  }
+  rank <- stats::setNames(integer(length(ids)), ids)
+  for (id in ids) {
+    r <- 0L; cur <- pred[[id]]; seen <- character(0)
+    while (!is.na(cur) && nzchar(cur) && !(cur %in% seen) && r < 50L) {
+      r <- r + 1L; seen <- c(seen, cur)
+      cur <- if (cur %in% names(pred)) pred[[cur]] else NA_character_
+    }
+    rank[[id]] <- r
+  }
+  rank
+}
+
+# Best-effort inference of `id_before` / `id_after` from the free-text `remark`,
+# for feeds (like CODiS station_list) that document the succession fields but do
+# not return them. Conservative: only fires on explicit "...(站碼NNNNNN)...新站"
+# (this station succeeds NNNNNN) or "...變更站碼為(NNNNNN)" (this station became
+# NNNNNN), and never overrides a value already present.
+.tww_infer_succession <- function(stations) {
+  ids <- as.character(stations$station_id)
+  id_before <- if ("id_before" %in% names(stations)) {
+    as.character(stations$id_before)
+  } else rep(NA_character_, length(ids))
+  id_after <- if ("id_after" %in% names(stations)) {
+    as.character(stations$id_after)
+  } else rep(NA_character_, length(ids))
+
+  if ("remark" %in% names(stations)) {
+    rmk <- as.character(stations$remark); rmk[is.na(rmk)] <- ""
+    code <- "[0-9A-Z][0-9A-Z]{5}"                  # 6-char CWA station code
+    grab <- function(text, anchor) {
+      m <- regmatches(text,
+                      regexpr(paste0(anchor, "\\s*[（(]?\\s*", code), text))
+      if (!length(m)) return(NA_character_)
+      cc <- regmatches(m, regexpr(code, m))
+      if (length(cc)) cc else NA_character_
+    }
+    for (i in seq_along(ids)) {
+      r <- rmk[i]
+      if ((is.na(id_before[i]) || !nzchar(id_before[i])) &&
+          grepl("新站|取代|前身", r)) {
+        cc <- grab(r, "站碼")
+        if (!is.na(cc) && cc != ids[i]) id_before[i] <- cc
+      }
+      if ((is.na(id_after[i]) || !nzchar(id_after[i])) &&
+          grepl("變更站碼為|改碼|更名為", r)) {
+        cc <- grab(r, "站碼為")
+        if (!is.na(cc) && cc != ids[i]) id_after[i] <- cc
+      }
+    }
+  }
+  stations$id_before <- id_before
+  stations$id_after  <- id_after
+  stations
 }
 
 # Parse a date-ish input into a single `Date` (accepts Date/POSIXt, or
@@ -356,7 +474,7 @@ utils::globalVariables(c("time", "station_id", "status"))
       if (!is.null(win_e)) e[is.na(e)] <- as.numeric(as.Date(win_e))
       dur <- e - s
     } else {
-      op  <- panel[panel$status == .tww_status_levels()[2], , drop = FALSE]
+      op  <- panel[grepl("^Operating", as.character(panel$status)), , drop = FALSE]
       cnt <- tapply(rep(1L, nrow(op)), as.character(op$station_id), sum)
       dur <- as.numeric(cnt[ids])
     }
@@ -370,7 +488,7 @@ utils::globalVariables(c("time", "station_id", "status"))
   key <- if (!is.null(est)) {
     as.numeric(est[ids])
   } else {
-    op <- panel[panel$status == .tww_status_levels()[2], , drop = FALSE]
+    op <- panel[grepl("^Operating", as.character(panel$status)), , drop = FALSE]
     first_op <- tapply(as.numeric(op$time), as.character(op$station_id), min)
     as.numeric(first_op[ids])
   }

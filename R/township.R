@@ -278,6 +278,15 @@ assign_township <- function(stations, boundaries) {
 #' @param pool_size Number of nearest stations (per region) downloaded to
 #'   interpolate from when `obs` is not supplied. `NULL` (default) uses
 #'   `max(30, 3 * k_nearest)`. Ignored when `obs` is supplied.
+#' @param dist_from How the station-to-region distance that drives the weights is
+#'   measured: `"surface"` (default) from the region's representative interior
+#'   point ([sf::st_point_on_surface()], always inside the polygon);
+#'   `"centroid"` from the geometric centroid (can fall outside a concave or
+#'   multi-part region); or `"edge"` from the region's **boundary** — `0` for any
+#'   station inside the polygon, so in-region stations get full weight and the
+#'   result reduces to their average, with outside stations interpolated by their
+#'   distance to the border. `"edge"` is the most faithful but costs an
+#'   \pkg{sf} distance computation.
 #' @param stations Optional pre-fetched station table (from [get_stations()]).
 #'   If `NULL`, it is downloaded.
 #' @param obs Optional pre-downloaded observations (a [get_weather()] result) to
@@ -320,12 +329,14 @@ get_region_weather <- function(start, end,
                                k_nearest = 8,
                                max_dist = NULL,
                                pool_size = NULL,
+                               dist_from = c("surface", "centroid", "edge"),
                                stations = NULL,
                                obs = NULL,
                                clean = TRUE,
                                na_codes = .tww_default_na_codes(),
                                quiet = TRUE) {
   type <- match.arg(type)
+  dist_from <- match.arg(dist_from)
   .tww_need_sf()
   if (missing(shp) || is.null(shp)) {
     stop("`shp` is required: pass an sf object or a path/URL to a shapefile.",
@@ -361,7 +372,11 @@ get_region_weather <- function(start, end,
     stop("No matching region(s) in `shp`.", call. = FALSE)
   }
 
-  targets <- .tww_region_points(boundaries, key = "region", ids = all_regions)
+  # representative point per region (also the download anchor); "edge" still
+  # needs a point for the download pool, so it uses the on-surface point.
+  pt_method <- if (dist_from == "centroid") "centroid" else "surface"
+  targets <- .tww_region_points(boundaries, key = "region", ids = all_regions,
+                                method = pt_method)
 
   if (is.null(obs)) {
     pool <- if (is.null(pool_size)) {
@@ -381,10 +396,21 @@ get_region_weather <- function(start, end,
     obs <- .tww_check_obs(obs)
   }
 
+  # "edge": distance from each region's boundary (0 if a station is inside),
+  # computed only for the stations actually present in obs.
+  dist_mat <- NULL
+  if (dist_from == "edge") {
+    sob <- stations[as.character(stations$station_id) %in%
+                      unique(as.character(obs$station_id)), , drop = FALSE]
+    dist_mat <- .tww_region_edge_dist(boundaries, key = "region",
+                                      ids = targets$region, stations = sob)
+  }
+
   out <- .tww_idw_interpolate(
     obs, targets, stations,
     id_cols   = "region",
-    power     = power, k_nearest = k_nearest, max_dist = max_dist)
+    power     = power, k_nearest = k_nearest, max_dist = max_dist,
+    dist_mat  = dist_mat)
 
   used <- unique(as.character(obs$station_id))
   used <- used[!is.na(used) & nzchar(used)]
@@ -441,13 +467,16 @@ get_region_weather <- function(start, end,
   stations
 }
 
-# One representative interior point per region. Polygons that share a `key`
-# value are unioned first, then reduced to a single point guaranteed to lie
-# inside the region (st_point_on_surface), which is the target the surrounding
-# stations are interpolated to. Returns a data frame with the `key` column plus
-# numeric `lon` / `lat`.
-.tww_region_points <- function(boundaries, key, ids = NULL) {
+# One representative point per region. Polygons that share a `key` value are
+# unioned first, then reduced to a single point: `method = "surface"` uses
+# st_point_on_surface (always inside the polygon, even concave ones);
+# `"centroid"` uses the geometric centroid (which can fall outside a concave or
+# multi-part region). Returns a data frame with the `key` column plus numeric
+# `lon` / `lat`.
+.tww_region_points <- function(boundaries, key, ids = NULL,
+                               method = c("surface", "centroid")) {
   .tww_need_sf()
+  method <- match.arg(method)
   kv <- as.character(boundaries[[key]])
   if (is.null(ids)) {
     ids <- unique(kv[!is.na(kv) & nzchar(kv)])
@@ -461,7 +490,11 @@ get_region_weather <- function(start, end,
     if (!any(sel)) next
     g  <- suppressWarnings(sf::st_union(
       sf::st_geometry(boundaries[sel, , drop = FALSE])))
-    pt <- suppressWarnings(sf::st_point_on_surface(g))
+    pt <- if (method == "centroid") {
+      suppressWarnings(sf::st_centroid(g))
+    } else {
+      suppressWarnings(sf::st_point_on_surface(g))
+    }
     xy <- sf::st_coordinates(pt)
     lon[i] <- xy[1, 1]
     lat[i] <- xy[1, 2]
@@ -470,6 +503,34 @@ get_region_weather <- function(start, end,
                     stringsAsFactors = FALSE, check.names = FALSE)
   out[[key]] <- ids
   out[, c(key, "lon", "lat"), drop = FALSE]
+}
+
+# Great-circle km distance from each region's polygon *boundary* to each station
+# (0 when the station falls inside the region). Returns a matrix with one row per
+# `id` (in `ids` order) and one column per station (named by `station_id`), used
+# by the `dist_from = "edge"` interpolation mode.
+.tww_region_edge_dist <- function(boundaries, key, ids, stations) {
+  .tww_need_sf()
+  kv <- as.character(boundaries[[key]])
+  geoms <- lapply(ids, function(id) {
+    sel <- !is.na(kv) & kv == as.character(id)
+    if (!any(sel)) return(NULL)
+    suppressWarnings(sf::st_union(
+      sf::st_geometry(boundaries[sel, , drop = FALSE])))
+  })
+  ok <- !vapply(geoms, is.null, logical(1))
+  pts <- sf::st_geometry(sf::st_as_sf(
+    stations, coords = c("lon", "lat"), crs = 4326, remove = FALSE))
+  D <- matrix(NA_real_, length(ids), nrow(stations),
+              dimnames = list(as.character(ids),
+                              as.character(stations$station_id)))
+  if (any(ok)) {
+    polys <- do.call(c, geoms[ok])
+    polys <- sf::st_transform(polys, 4326)
+    d <- suppressWarnings(sf::st_distance(polys, pts))  # metres, geodesic
+    D[ok, ] <- as.numeric(d) / 1000                     # -> km
+  }
+  D
 }
 
 # The `pool_size` station ids nearest each target point (great-circle), used as
@@ -501,7 +562,8 @@ get_region_weather <- function(start, end,
 # `targets`  : data.frame with `id_cols` plus numeric `lon`, `lat`.
 # `stations` : data.frame with `station_id`, `lon`, `lat`.
 .tww_idw_interpolate <- function(obs, targets, stations, id_cols,
-                                 power = 2, k_nearest = 8, max_dist = NULL) {
+                                 power = 2, k_nearest = 8, max_dist = NULL,
+                                 dist_mat = NULL) {
   meta_cols  <- c("station_id", "obs_time")
   value_cols <- setdiff(names(obs), meta_cols)
   num_cols   <- value_cols[vapply(obs[value_cols], is.numeric, logical(1))]
@@ -542,10 +604,18 @@ get_region_weather <- function(start, end,
   t_idx <- match(obs$obs_time, times)
   cell  <- (t_idx - 1L) * ns + s_idx                  # column-major into ns x nt
 
-  # target x station great-circle distance matrix (km)
-  D <- matrix(NA_real_, nreg, ns)
-  for (r in seq_len(nreg)) {
-    D[r, ] <- .tww_haversine_km(targets$lon[r], targets$lat[r], slon, slat)
+  # target x station distance matrix (km). Either a caller-supplied matrix
+  # (e.g. polygon-edge distances, rows aligned to `targets`, columns named by
+  # station id) subset to the station universe, or great-circle distances from
+  # each region's representative point.
+  if (!is.null(dist_mat)) {
+    D <- dist_mat[, match(sid, colnames(dist_mat)), drop = FALSE]
+    D <- matrix(as.numeric(D), nreg, ns)
+  } else {
+    D <- matrix(NA_real_, nreg, ns)
+    for (r in seq_len(nreg)) {
+      D[r, ] <- .tww_haversine_km(targets$lon[r], targets$lat[r], slon, slat)
+    }
   }
 
   zero <- 1e-9

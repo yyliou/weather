@@ -81,3 +81,44 @@ test_that("plot_station_panel returns a ggplot when ggplot2 is available", {
   gg2 <- plot_station_panel(make_stations(), start = 20000101, end = 20241231)
   expect_s3_class(gg2, "ggplot")
 })
+
+test_that("succession rank follows the id_before chain", {
+  st <- data.frame(
+    station_id = c("OLD", "NEW1", "NEW2", "SOLO"),
+    id_before  = c(NA, "OLD", "NEW1", NA),
+    stringsAsFactors = FALSE)
+  rk <- .tww_succession_rank(st)
+  expect_equal(unname(rk[c("OLD", "NEW1", "NEW2", "SOLO")]), c(0L, 1L, 2L, 0L))
+})
+
+test_that("succession recolours successor stations by chain depth", {
+  st <- data.frame(
+    station_id = c("OLD", "NEW1", "NEW2"),
+    start_date = as.Date(c("2000-01-01", "2010-01-01", "2020-01-01")),
+    end_date   = as.Date(c("2009-12-31", "2019-12-31", NA)),
+    id_before  = c(NA, "OLD", "NEW1"),
+    stringsAsFactors = FALSE)
+  p <- station_panel(st, "2000-01-01", "2024-12-31", by = "year")
+  expect_true(any(grepl("successor", levels(p$status))))
+  expect_equal(stat(p, "OLD",  "2005"), "Operating")                  # original
+  expect_equal(stat(p, "NEW1", "2015"), "Operating (successor 1)")    # 1st
+  expect_equal(stat(p, "NEW2", "2021"), "Operating (successor 2+)")   # 2nd
+})
+
+test_that("plain panel without succession keeps the three base levels", {
+  p <- station_panel(make_stations(), "2000-01-01", "2024-12-31", by = "year")
+  expect_equal(levels(p$status),
+               c("Not yet established", "Operating", "Decommissioned"))
+})
+
+test_that("succession is inferred from remark text, conservatively", {
+  st <- data.frame(
+    station_id = c("466880", "466881"),
+    remark = c("2023/01/01遷移至新店區，並更名為臺北氣象站新北站區。",
+               "為臺北氣象站板橋站區(站碼466880)遷移之新站，於2023/01/03取代舊站。"),
+    stringsAsFactors = FALSE)
+  out <- .tww_infer_succession(st)
+  expect_equal(out$id_before[out$station_id == "466881"], "466880")
+  # the older station's remark does not falsely point anywhere
+  expect_true(is.na(out$id_before[out$station_id == "466880"]))
+})

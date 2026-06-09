@@ -317,12 +317,21 @@
 .tww_clean <- function(df, na_codes) {
   tokens     <- .tww_na_tokens()
   nonneg_pat <- .tww_nonneg_pattern()
+  precip_pat <- "降水|雨量|precip|rain"
   dir_pat    <- "風向|wind ?direction|winddirection"
+  # Trace (微量, <0.5mm) markers, written as text "T" or the integer code -9991
+  # at any decimal scale. Trace is a *measured* tiny amount, so it becomes 0 (not
+  # NA) in precipitation-amount columns.
+  trace_codes <- c(-9991, -999.1, -99.91, -9.991)
   cols <- setdiff(names(df), "obs_time")
   for (nm in cols) {
     v <- df[[nm]]
+    is_precip <- grepl(precip_pat, nm, ignore.case = TRUE)
+    # Trace applies to precipitation *amount*, not its duration ("時數"/hours).
+    is_amount <- is_precip && !grepl("時數|duration", nm, ignore.case = TRUE)
     if (is.character(v)) {
       vt <- trimws(v)
+      if (is_amount) vt[toupper(vt) == "T"] <- "0"   # trace text -> 0
       vt[tolower(vt) %in% tokens] <- NA_character_
       vn <- suppressWarnings(as.numeric(vt))
       # Coerce to numeric when every non-missing entry parsed as a number
@@ -331,6 +340,9 @@
       v <- if (!any(parse_fail)) vn else vt
     }
     if (is.numeric(v)) {
+      # 0. trace codes in a precipitation-amount column -> 0, before they would
+      #    otherwise be NA'd as a sentinel below.
+      if (is_amount) v[is.finite(v) & v %in% trace_codes] <- 0
       # 1. explicit sentinel codes
       if (length(na_codes)) v[v %in% na_codes] <- NA
       # 2. any large-magnitude negative is a missing marker, at whatever scale

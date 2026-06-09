@@ -9,7 +9,7 @@ The package gives you these functions:
 | Function | Purpose |
 |---|---|
 | `get_stations()` | 測站基本資料 — station metadata (id, name, lon/lat, county) |
-| `station_panel()` / `plot_station_panel()` | 營運狀態面板 — panelview-style station operating-status panel (Not yet established / Operating / Decommissioned) over a time window |
+| `station_panel()` / `plot_station_panel()` | 營運狀態面板 — panelview-style station operating-status panel (Not yet established / Operating / Decommissioned, plus successor-station shading) over a time window |
 | `assign_township()` | 測站歸屬鄉鎮 — tag each station with the township polygon it falls in |
 | `load_tw_townships()` | 鄉鎮界線 — download / read the official NLSC township boundary layer as an `sf` object |
 | `get_weather()` | 測量資料 — station observation time series (hourly / daily / monthly) |
@@ -90,13 +90,23 @@ plot_station_panel(tp, start = "2000-01-01", end = "2024-12-31", by = "month")
 - `plot_station_panel()` returns a normal `ggplot`, so you can keep styling it.
   Useful arguments: `sort` (`"start"` / `"duration"` / `"id"` / `"name"` /
   `"none"` — `"duration"` orders stations by how long they operated, longest at
-  the top), `colors` (named vector for the three states), `label_col`
+  the top), `colors` (named vector for the status states), `label_col`
   (`"station_id"` or `"name"`) and `labels` (force the y-axis labels on/off).
   With many stations the y labels are hidden automatically (see `max_labels`).
 
 A station with a missing set-up date is treated as "set up before the window"
 and a missing decommission date as "still operating", so stations with unknown
 dates default to `Operating` rather than dropping out of the plot.
+
+**Succession.** When a station is relocated / re-coded, its record is continued
+by a successor (e.g. 466880 板橋 → 466881 新北). With `succession = "auto"`
+(default), an operating station that took over from an older one is shown in a
+distinct colour by its place in the chain: gold for `Operating (successor 1)`,
+purple for `Operating (successor 2+)`. The links are read from `id_before` /
+`id_after` columns when present; the CODiS `station_list` feed doesn't expose
+them as fields, so by default they're inferred (conservatively) from the
+`remark` text — supply `id_before` / `id_after` yourself for full accuracy, or
+set `succession = "off"` for the plain three states.
 
 ## 3. Measurement data
 
@@ -123,7 +133,8 @@ wd <- get_weather(c("466920", "466930"), "2024-01-01", "2024-01-31", type = "dai
   negative in a physically non-negative variable (rainfall, precip hours,
   humidity, wind speed, radiation, pressure, …) is too — while genuinely
   signed variables (temperature, dew point, evaporation) keep their negatives.
-  Out-of-range wind directions (e.g. `990`) are also cleaned.
+  Out-of-range wind directions (e.g. `990`) are also cleaned. **Trace
+  precipitation** (`T` / `-9991`, a measured `<0.5 mm`) becomes `0`, not `NA`.
 
 ## 4. Interpolate to any polygons
 
@@ -139,12 +150,22 @@ $$
 v \;=\; \frac{\sum_i w_i\,x_i}{\sum_i w_i}, \qquad w_i = \frac{1}{d_i^{\,\text{power}}}
 $$
 
-where $d_i$ is the great-circle distance from the polygon's representative point
-to station $i$. Every variable — rainfall included — is interpolated; nothing is
-averaged over a polygon's own stations (a station sitting on the point is used
-directly, so nearby stations still dominate). If no station within range reports
-the variable, the cell is `NA`. Polygons sharing an `id_field` value are unioned
-and treated as one region.
+where $d_i$ is the distance from the polygon to station $i$. Every variable —
+rainfall included — is interpolated; nothing is averaged over a polygon's own
+stations (a station at distance 0 is used directly, so nearby stations still
+dominate). If no station within range reports the variable, the cell is `NA`.
+Polygons sharing an `id_field` value are unioned and treated as one region.
+
+**How distance is measured** is set by `dist_from`:
+
+- `"surface"` (default) — from the polygon's representative interior point
+  (`sf::st_point_on_surface()`, always inside, even for concave shapes).
+- `"centroid"` — from the geometric centroid (can fall outside a concave or
+  multi-part region).
+- `"edge"` — from the polygon **boundary**: distance is `0` for any station
+  *inside* the region (so the result becomes the average of the in-region
+  stations), and the border distance for stations outside. Most faithful, but
+  costs an `sf` distance computation.
 
 The recommended flow is **two steps** — download once (section 3), then
 interpolate — so you can re-run with different polygons or settings without

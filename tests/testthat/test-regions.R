@@ -129,3 +129,33 @@ test_that("get_region_weather rejects a malformed obs table", {
                        stations = stations, obs = bad),
     "must be a data frame from get_weather")
 })
+
+test_that("region_points supports both on-surface and centroid", {
+  testthat::skip_if_not_installed("sf")
+  sq  <- sf::st_polygon(list(rbind(c(0, 0), c(2, 0), c(2, 2), c(0, 2), c(0, 0))))
+  bnd <- sf::st_sf(region = "A", geometry = sf::st_sfc(sq, crs = 4326))
+  p_c <- .tww_region_points(bnd, "region", method = "centroid")
+  p_s <- .tww_region_points(bnd, "region", method = "surface")
+  expect_equal(p_c$lon, 1); expect_equal(p_c$lat, 1)        # square centre
+  expect_true(p_s$lon > 0 && p_s$lon < 2)                   # inside the square
+})
+
+test_that("dist_from = 'edge' gives in-region stations zero distance", {
+  testthat::skip_if_not_installed("sf")
+  sq <- function(x0) sf::st_polygon(list(rbind(
+    c(x0, 0), c(x0 + 1, 0), c(x0 + 1, 1), c(x0, 1), c(x0, 0))))
+  bnd <- sf::st_sf(TOWNID = c("L01", "R01"),
+                   geometry = sf::st_sfc(sq(0), sq(2), crs = 4326))
+  stations <- data.frame(station_id = c("A", "B"), name = c("a", "b"),
+                         lon = c(0.5, 2.5), lat = c(0.5, 0.5),
+                         stringsAsFactors = FALSE)
+  obs <- data.frame(station_id = c("A", "B"), obs_time = "2024-01-01",
+                    temp = c(10, 30),
+                    check.names = FALSE, stringsAsFactors = FALSE)
+  rw <- get_region_weather(
+    start = "2024-01-01", end = "2024-01-01", type = "daily",
+    shp = bnd, id_field = "TOWNID",
+    stations = stations, obs = obs, dist_from = "edge")
+  expect_equal(rw[rw$region == "L01", ]$temp, 10)   # A inside L01 -> dist 0
+  expect_equal(rw[rw$region == "R01", ]$temp, 30)   # B inside R01 -> dist 0
+})

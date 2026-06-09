@@ -25,7 +25,9 @@
 #' @return A data frame. With `raw = FALSE` (default) it contains at least
 #'   `station_id`, `name`, `lon`, `lat`, and, when available, `name_en`,
 #'   `altitude`, `county`, `town`, `address`, `area`, `attribute`,
-#'   `start_date`, `end_date`, `remark` and `active`. Provider noise columns
+#'   `start_date`, `end_date`, `remark`, `active`, and the succession codes
+#'   `id_before` / `id_after` (when the feed supplies them; usually absent and
+#'   inferred by [station_panel()] from `remark`). Provider noise columns
 #'   (e.g. `log`, `extend.mainPic`) are dropped unless `raw = TRUE`.
 #'
 #' @examples
@@ -159,6 +161,10 @@ get_stations <- function(url = NULL,
   col_edate <- pick(c("stationenddate", "enddate", "end_date"))
   col_act   <- pick(c("active", "status", "statusfg", "state", "switch"))
   col_rmk   <- pick(c("webremark", "remark", "note"))
+  col_idbef <- pick(c("stationidbefore", "idbefore", "id_before", "oldid",
+                      "stationidold", "stno_old"))
+  col_idaft <- pick(c("stationidafter", "idafter", "id_after", "newid",
+                      "stationidnew", "stno_new"))
 
   if (is.na(col_id) || is.na(col_lat) || is.na(col_lon)) {
     stop("Could not locate id / latitude / longitude columns in the station ",
@@ -197,6 +203,12 @@ get_stations <- function(url = NULL,
     out$end_date <- suppressWarnings(as.Date(end_chr))
   }
   if (!is.na(col_rmk)) out$remark <- chr(dat[[col_rmk]])
+  # Succession (predecessor / successor station codes). Usually absent from the
+  # station_list payload as structured fields, but kept here if the feed (or a
+  # caller's table) supplies them; station_panel() can also infer them from the
+  # remark text.
+  if (!is.na(col_idbef)) out$id_before <- chr(dat[[col_idbef]])
+  if (!is.na(col_idaft)) out$id_after  <- chr(dat[[col_idaft]])
 
   # Active flag: prefer an explicit status column; otherwise a station is
   # "active" when it carries no decommission (end) date.
