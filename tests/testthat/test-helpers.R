@@ -114,3 +114,43 @@ test_that("fast path and base parser agree on the same input", {
   expect_equal(.tww_read_csv(f, .tww_default_na_codes(), TRUE),
                .tww_read_csv_base(f, .tww_default_na_codes(), TRUE))
 })
+
+test_that("negative rainfall / precip-hours sentinels are cleaned", {
+  df <- data.frame(
+    obs_time      = c("2024-01-01", "2024-01-02"),
+    `降水量(mm)`   = c("0.0", "-9.96"),
+    `降水時數(hr)` = c("1.0", "-9.5"),
+    check.names = FALSE, stringsAsFactors = FALSE)
+  out <- .tww_clean(df, .tww_default_na_codes())
+  expect_equal(out[["降水量(mm)"]],   c(0.0, NA))
+  expect_equal(out[["降水時數(hr)"]], c(1.0, NA))
+})
+
+test_that("large-magnitude negative sentinels are cleaned in any column", {
+  df <- data.frame(
+    obs_time = c("a", "b", "c"),
+    soil     = c("19.5", "-99.5", "-99.95"),   # -99.8, -9991 ... family, any scale
+    check.names = FALSE, stringsAsFactors = FALSE)
+  out <- .tww_clean(df, .tww_default_na_codes())
+  expect_equal(out$soil, c(19.5, NA, NA))
+})
+
+test_that("legitimately-negative variables are preserved", {
+  df <- data.frame(
+    obs_time   = c("a", "b"),
+    `氣溫(℃)`   = c("-9.5", "12.0"),   # valid sub-zero mountain temperature
+    EvapA      = c("-2.3", "3.1"),     # negative evaporation = it rained (valid)
+    check.names = FALSE, stringsAsFactors = FALSE)
+  out <- .tww_clean(df, .tww_default_na_codes())
+  expect_equal(out[["氣溫(℃)"]], c(-9.5, 12.0))
+  expect_equal(out$EvapA, c(-2.3, 3.1))
+})
+
+test_that("out-of-range wind directions are cleaned, valid ones kept", {
+  df <- data.frame(
+    obs_time          = c("a", "b", "c"),
+    `風向(360degree)` = c("360.0", "990.0", "0.0"),
+    check.names = FALSE, stringsAsFactors = FALSE)
+  out <- .tww_clean(df, .tww_default_na_codes())
+  expect_equal(out[["風向(360degree)"]], c(360.0, NA, 0.0))
+})

@@ -275,11 +275,49 @@
 # whitespace-insensitive) *before* the numeric coercion, so the column converts
 # cleanly to numeric with genuine NAs.
 .tww_na_tokens <- function() {
-  c("", "na", "n/a", "null", "nan", "none", "nil", "--", "-", "...", ".", "x")
+  # Plus the CODiS text symbols (Readme): T trace, x malfunction, & accumulated,
+  # V variable wind, / unknown, -- no observation.
+  c("", "na", "n/a", "null", "nan", "none", "nil", "--", "-", "...", ".",
+    "x", "t", "v", "/", "&")
 }
 
+# Column-name patterns for variables that are **physically non-negative**, so any
+# negative value in them is a missing-data sentinel (e.g. rainfall -9.96, precip
+# hours -9.5). Deliberately excludes temperature, dew point, wind *direction* and
+# evaporation, which can legitimately be negative (per the CODiS Readme, a
+# negative daily evaporation means it rained during the measurement window).
+.tww_nonneg_pattern <- function() {
+  paste(c(
+    "降水", "雨量", "precip", "rain",                 # rainfall + precip hours
+    "日照", "sunshine",                               # sunshine duration / rate
+    "日射", "radiation", "solar",                     # solar radiation
+    "溼度", "濕度", "humidity",                       # relative humidity
+    "風速", "陣風", "gust", "wind ?speed", "windspeed",  # wind / gust SPEED
+    "能見度", "visib",                                # visibility
+    "紫外", "uvi",                                    # UV index
+    "雲量", "cloud",                                  # cloud amount
+    "氣壓", "pressure",                               # pressure (always ~hundreds)
+    "vmc", "含水", "moisture"                         # soil moisture
+  ), collapse = "|")
+}
+
+# Convert known CODiS missing-value sentinels to NA in numeric columns.
+#
+# Missing cells arrive in several disguises:
+#  * text tokens ("NA", " NA ", "--", "x", "T", ...) -> blanked before coercion
+#    so the column still converts cleanly to numeric (see `.tww_na_tokens`);
+#  * the documented integer codes (-9991, -9996 ... -9999) and their
+#    decimal-scaled forms, which differ by station type and column: -99.5, -99.7,
+#    -99.8, -99.95, -9.5, -9.96, ... Rather than enumerate every scale we treat
+#    **any large-magnitude negative (<= -90) as missing** (no Taiwan weather
+#    variable legitimately reaches it), and additionally treat **any negative in
+#    a physically non-negative variable as missing** (catches the small ones like
+#    -9.5 / -9.96 in rainfall / precip hours);
+#  * out-of-range wind directions (e.g. 990) -> NA (valid range is 0-360).
 .tww_clean <- function(df, na_codes) {
-  tokens <- .tww_na_tokens()
+  tokens     <- .tww_na_tokens()
+  nonneg_pat <- .tww_nonneg_pattern()
+  dir_pat    <- "風向|wind ?direction|winddirection"
   cols <- setdiff(names(df), "obs_time")
   for (nm in cols) {
     v <- df[[nm]]
@@ -292,17 +330,30 @@
       parse_fail <- is.na(vn) & !is.na(vt)
       v <- if (!any(parse_fail)) vn else vt
     }
-    if (is.numeric(v) && length(na_codes)) {
-      v[v %in% na_codes] <- NA
+    if (is.numeric(v)) {
+      # 1. explicit sentinel codes
+      if (length(na_codes)) v[v %in% na_codes] <- NA
+      # 2. any large-magnitude negative is a missing marker, at whatever scale
+      v[is.finite(v) & v <= -90] <- NA
+      # 3. physically non-negative variables: any remaining negative is a sentinel
+      if (grepl(nonneg_pat, nm, ignore.case = TRUE)) {
+        v[is.finite(v) & v < 0] <- NA
+      }
+      # 4. wind direction must lie in [0, 360]; markers such as 990 -> NA
+      if (grepl(dir_pat, nm, ignore.case = TRUE)) {
+        v[is.finite(v) & (v < 0 | v > 360)] <- NA
+      }
     }
     df[[nm]] <- v
   }
   df
 }
 
-# Default CODiS missing-value codes seen in this feed.
+# Default CODiS missing-value codes (the documented integer codes). The general
+# rules in `.tww_clean` (large-negative + non-negative-variable) catch the
+# decimal-scaled variants, so this list only needs the canonical integers.
 .tww_default_na_codes <- function() {
-  c(-9991, -9996, -9997, -9998, -9999, -99.8, -99.7)
+  c(-9991, -9996, -9997, -9998, -9999)
 }
 
 # Pull the station id out of a per-station filename inside the zip, e.g.

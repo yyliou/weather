@@ -116,8 +116,14 @@ wd <- get_weather(c("466920", "466930"), "2024-01-01", "2024-01-31", type = "dai
   (observation time) is renamed `obs_time` and normalised to ISO format
   (`YYYY-MM-DD`, or `YYYY-MM` for monthly).
 - With `clean = TRUE` (default), value columns are coerced to numeric and CODiS
-  missing-value sentinels (e.g. `-99.8`, `-9999`, and literal text like `"NA"` /
-  `"--"`) become `NA`.
+  missing-value sentinels become `NA`. This covers the text symbols (`NA`, `--`,
+  `x`, `T`, `V`, `/`), the documented integer codes (`-9991`, `-9996`…`-9999`)
+  **and their decimal-scaled forms** (`-99.8`, `-99.5`, `-9.96`, `-9.5`, …):
+  any large-magnitude negative (`<= -90`) is treated as missing, and any
+  negative in a physically non-negative variable (rainfall, precip hours,
+  humidity, wind speed, radiation, pressure, …) is too — while genuinely
+  signed variables (temperature, dew point, evaporation) keep their negatives.
+  Out-of-range wind directions (e.g. `990`) are also cleaned.
 
 ## 4. Interpolate to any polygons
 
