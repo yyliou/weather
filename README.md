@@ -1,21 +1,14 @@
 # twweather <img src="man/figures/logo.png" align="right" height="139" alt="twweather logo" />
 
-Download Taiwan historical weather observations from the NCHU
+## 1. Overview
+
+`twweather` downloads Taiwan historical weather observations from the NCHU
 [*CWB Historical Weather Data Downloader*](https://mycolab.pp.nchu.edu.tw/historical_weather/index.php),
-which redistributes Central Weather Administration (CWA / CODiS) station data.
-
-The package gives you these functions:
-
-| Function | Purpose |
-|---|---|
-| `get_stations()` | 測站基本資料 — station metadata (id, name, lon/lat, county) |
-| `station_panel()` / `plot_station_panel()` | 營運狀態面板 — panelview-style station operating-status panel (Not yet established / Operating / Decommissioned, plus successor-station shading) over a time window |
-| `assign_township()` | 測站歸屬鄉鎮 — tag each station with the township polygon it falls in |
-| `load_tw_townships()` | 鄉鎮界線 — download / read the official NLSC township boundary layer as an `sf` object |
-| `get_weather()` | 測量資料 — station observation time series (hourly / daily / monthly) |
-| `get_region_weather()` | 內插法 — interpolate weather to **any polygons you supply** by inverse-distance weighting, keyed by one id column |
-
-## Install
+which redistributes Central Weather Administration (CWA / CODiS) station data. It
+provides station metadata, station observation time series (hourly / daily /
+monthly), a panelview-style station operating-status panel, and interpolation of
+station data to arbitrary polygons (e.g. townships) by inverse-distance
+weighting.
 
 ```r
 # install.packages("remotes")
@@ -23,279 +16,171 @@ remotes::install_github("yyliou/weather")
 ```
 
 Core functions need only `jsonlite`. The interpolation and boundary helpers
-(`get_region_weather()`, `load_tw_townships()`, `assign_township()`) additionally
-need `sf` (`install.packages("sf")`). Installing `data.table` speeds up parsing.
+(`get_region_weather()`, `load_tw_townships()`, `assign_township()`) also need
+`sf`. Installing `data.table` speeds up CSV parsing. The `man/*.Rd` help pages
+are not checked in; run `roxygen2::roxygenise()` once to build them.
 
-The functions carry roxygen comments but the `man/*.Rd` help pages aren't
-checked in. To build them (and pass `R CMD check`), run once:
+## 2. Functions
 
-```r
-# install.packages("roxygen2")
-roxygen2::roxygenise()    # or devtools::document()
-```
+| Function | Purpose |
+|---|---|
+| `get_stations()` | Station metadata (id, name, lon/lat, county, dates). |
+| `get_weather()` | Station observation time series (hourly / daily / monthly). |
+| `get_region_weather()` | Interpolate weather to any polygons you supply, by IDW. |
+| `station_panel()` / `plot_station_panel()` | Build / plot a panelview-style station operating-status panel. |
+| `load_tw_townships()` | Download/read the official NLSC township boundary layer as an `sf` object. |
+| `assign_township()` | Tag each station with the township polygon it falls in. |
 
+## 3. Arguments
 
-## 1. Station metadata
+**`get_stations(url, active_only, raw)`** — `active_only = TRUE` (default) keeps
+only operating stations; `raw = TRUE` returns the provider's original columns.
+
+**`get_weather(station_id, start, end, type, clean, na_codes, quiet, max_ids)`**
+
+| Argument | Description | Default |
+|---|---|---|
+| `station_id` | One or more CWA station ids (`"467490"`, `c("466920","466930")`). | required |
+| `start`, `end` | Inclusive dates: `Date`/`POSIXt` or `YYYYMMDD` / `YYYY-MM-DD`. `end` cannot be later than yesterday. | required |
+| `type` | `"hourly"` (default), `"daily"`, or `"monthly"`. | `"hourly"` |
+| `clean` | Coerce values to numeric and map CODiS missing-value sentinels to `NA`. | `TRUE` |
+| `na_codes` | Sentinel values treated as missing when `clean = TRUE`. | CODiS codes |
+| `max_ids` | Max ids per HTTP call (larger sets are chunked). | `100` |
+
+**`get_region_weather(start, end, type, shp, id_field, regions, power, k_nearest, max_dist, pool_size, dist_from, stations, obs, clean, na_codes, quiet)`**
+
+| Argument | Description | Default |
+|---|---|---|
+| `shp` | Boundary polygons: an `sf` object or a path/URL to a shapefile/GeoPackage/GeoJSON/zipped shapefile. | required |
+| `id_field` | Column in `shp` identifying each region; its values become `region`. Polygons sharing a value are unioned. | required |
+| `regions` | Optional vector of `id_field` values to keep; `NULL` returns all. | `NULL` |
+| `power` | IDW distance exponent (higher = nearer stations weighted more). | `2` |
+| `k_nearest` | Number of nearest reporting stations blended per cell. | `8` |
+| `max_dist` | Optional cap (km) on contributing-station distance; beyond it ignored. | `NULL` |
+| `pool_size` | Nearest stations per region downloaded when `obs` is not supplied. | `max(30, 3*k_nearest)` |
+| `dist_from` | Distance basis: `"surface"` (representative interior point), `"centroid"`, or `"edge"` (polygon boundary; 0 inside). | `"surface"` |
+| `stations`, `obs` | Optional pre-fetched station table / pre-downloaded observations (the recommended fast path for repeated runs). | `NULL` |
+| `start`, `end`, `type`, `clean`, `na_codes`, `quiet` | Passed to `get_weather()` when `obs` is not supplied. | — |
+
+**`station_panel(stations, start, end, by, active_only, succession, infer_remark)`**
+and **`plot_station_panel(x, start, end, by, active_only, sort, colors, labels,
+max_labels, label_col, title, xlab, ylab)`** — `by` is `"year"` (default),
+`"month"`, or `"day"`; `sort` is `"start"`/`"duration"`/`"succession"`/`"id"`/
+`"name"`/`"none"`; `succession` is `"auto"` (default) or `"off"`.
+
+## 4. Output codebook
+
+**`get_stations()`** — a data frame with at least `station_id`, `name`, `lon`,
+`lat`, plus (when available) `name_en`, `altitude`, `county`, `town`, `address`,
+`area`, `attribute`, `start_date`, `end_date`, `remark`, `active`, and succession
+codes `id_before` / `id_after`.
+
+**`get_weather()`** — a leading `station_id` column, an `obs_time` column (the
+feed's first column, normalised to `YYYY-MM-DD`, or `YYYY-MM` for monthly), and
+one column per measured variable (original Chinese/English labels). Daily/monthly
+carry extra max/min/mean columns. With `clean = TRUE`, missing-value sentinels
+become `NA` while genuinely signed variables (temperature, dew point,
+evaporation) keep negatives; trace precipitation (`T` / `-9991`) becomes `0`.
+
+**`get_region_weather()`** — `region` (your `id_field` values), `obs_time`, one
+column per interpolated variable, and `n_stations` (nearby stations reporting at
+that step). The IDW `power` is kept in `attr(x, "power")` and the source station
+ids in `attr(x, "stations")`.
+
+**`station_panel()`** — one row per station per period: `station_id`, `name`,
+`county`, `time` (Date at period start), `period` (label such as `"2020"` or
+`"2020-03"`), and `status` (factor: `Not yet established` / `Operating` /
+`Decommissioned`, expanded with `Operating (successor 1/2)` when succession is
+detected). `plot_station_panel()` returns a `ggplot`.
+
+## 5. Examples
 
 ```r
 library(twweather)
 
+# Station metadata
 st <- get_stations()
-head(st[, c("station_id", "name", "county", "lon", "lat")])
-```
 
-Station metadata comes from the CODiS station list
-(<https://codis.cwa.gov.tw/StationData>). All station types (`cwb` 局屬氣象站,
-`agr` 農業站, automatic and rainfall stations, ...) are flattened into one tidy
-table with at least `station_id`, `name`, `lon`, `lat`, plus `altitude`,
-`county`, `address`, `area`, `attribute`, `start_date`, `end_date` and
-`active`. By default only operating stations are returned; pass
-`active_only = FALSE` to include decommissioned ones, or `raw = TRUE` to get the
-provider's original columns untouched.
+# Measurement data: one station hourly, or several daily
+w  <- get_weather("467490", "2024-01-01", "2024-01-07")
+wd <- get_weather(c("466920", "466930"), "2024-01-01", "2024-01-31",
+                  type = "daily")
 
-## 2. Station operating-status panel
-
-A [panelview](https://yiqingxu.org/packages/panelView/)-style view of which
-stations were operating over a window. Each station's `start_date` (set-up) and
-`end_date` (decommission) classify every time step into one of three states —
-`Not yet established`, `Operating` or `Decommissioned` — so you can see, at a
-glance, when stations came online and when they were retired. The labels are in
-English so the plot carries no Chinese text.
-
-```r
-# build the long status table: one row per station per period
-p <- station_panel(start = "1990-01-01", end = "2024-12-31", by = "year")
-table(p$status)
-
-# plot it (needs ggplot2; in Suggests)
-# install.packages("ggplot2")
+# Station operating-status panel (needs ggplot2)
 plot_station_panel(start = "1990-01-01", end = "2024-12-31", by = "year")
 ```
 
-- `by` is `"year"` (default), `"month"` or `"day"` — the time resolution of the
-  columns. `start` / `end` accept `Date` objects or `YYYYMMDD` / `YYYY-MM-DD`
-  strings.
-- By default the metadata is fetched with `active_only = FALSE`, so
-  decommissioned stations are kept (otherwise `Decommissioned` could never show
-  up). Pass your own metadata to restrict the panel:
+The IDW value for each *polygon × time step × variable* is
 
-```r
-st  <- get_stations(active_only = FALSE)
-tp  <- st[st$county == "臺北市", ]
-plot_station_panel(tp, start = "2000-01-01", end = "2024-12-31", by = "month")
-```
+$$ v = \frac{\sum_i w_i\,x_i}{\sum_i w_i}, \qquad w_i = \frac{1}{d_i^{\,\text{power}}} $$
 
-![Station operating-status panel for Taipei](man/figures/station-panel.png)
-
-- `plot_station_panel()` returns a normal `ggplot`, so you can keep styling it.
-  Useful arguments: `sort` (`"start"` / `"duration"` / `"succession"` / `"id"` /
-  `"name"` / `"none"` — `"duration"` orders rows by how long they operated and
-  `"succession"` groups them by colour), `colors` (named vector for the status
-  states), `label_col`
-  (`"station_id"` or `"name"`) and `labels` (force the y-axis labels on/off).
-  With many stations the y labels are hidden automatically (see `max_labels`).
-
-A station with a missing set-up date is treated as "set up before the window"
-and a missing decommission date as "still operating", so stations with unknown
-dates default to `Operating` rather than dropping out of the plot.
-
-**Succession.** When a station is relocated / re-coded, its record is continued
-by a successor (e.g. 466880 板橋 → 466881 新北). With `succession = "auto"`
-(default), a whole succession chain is **stacked onto one row**: the origin
-station's operating segment on the left (green), then each successor continuing
-to its right — gold for `Operating (successor 1)`, purple for
-`Operating (successor 2)` — so the row reads as one continuous timeline. The
-links are read from `id_before` / `id_after` columns when present; the CODiS
-`station_list` feed doesn't expose them as fields, so by default they're
-inferred (conservatively) from the `remark` text. Supply `id_before` /
-`id_after` yourself for full accuracy, or set `succession = "off"` for the plain
-per-station three-state panel.
-
-## 3. Measurement data
-
-```r
-# one station, hourly
-w <- get_weather("467490", "2024-01-01", "2024-01-07")
-
-# several stations, daily (server returns a ZIP; combined automatically)
-wd <- get_weather(c("466920", "466930"), "2024-01-01", "2024-01-31", type = "daily")
-```
-
-- `start` / `end` accept `Date` objects or `YYYYMMDD` / `YYYY-MM-DD` strings.
-  `end` cannot be later than yesterday (the source truncates it).
-- `type` is `"hourly"` (default), `"daily"` or `"monthly"`. Daily/monthly carry
-  extra max/min/mean columns.
-- A leading `station_id` column is always added; the original first column
-  (observation time) is renamed `obs_time` and normalised to ISO format
-  (`YYYY-MM-DD`, or `YYYY-MM` for monthly).
-- With `clean = TRUE` (default), value columns are coerced to numeric and CODiS
-  missing-value sentinels become `NA`. This covers the text symbols (`NA`, `--`,
-  `x`, `T`, `V`, `/`), the documented integer codes (`-9991`, `-9996`…`-9999`)
-  **and their decimal-scaled forms** (`-99.8`, `-99.5`, `-9.96`, `-9.5`, …):
-  any large-magnitude negative (`<= -90`) is treated as missing, and any
-  negative in a physically non-negative variable (rainfall, precip hours,
-  humidity, wind speed, radiation, pressure, …) is too — while genuinely
-  signed variables (temperature, dew point, evaporation) keep their negatives.
-  Out-of-range wind directions (e.g. `990`) are also cleaned. **Trace
-  precipitation** (`T` / `-9991`, a measured `<0.5 mm`) becomes `0`, not `NA`.
-
-## 4. Interpolate to any polygons
-
-`get_region_weather()` interpolates weather to **whatever polygons you give it** —
-townships, a custom grid, watersheds, anything. You pass the geometry (`shp`) and
-name the column that labels each polygon (`id_field`).
-
-For every *polygon × time step × variable* the value is the **pure
-inverse-distance-weighted (IDW)** mean of the `k_nearest` stations that report
-it:
-
-$$
-v \;=\; \frac{\sum_i w_i\,x_i}{\sum_i w_i}, \qquad w_i = \frac{1}{d_i^{\,\text{power}}}
-$$
-
-where $d_i$ is the distance from the polygon to station $i$. Every variable —
-rainfall included — is interpolated; nothing is averaged over a polygon's own
-stations (a station at distance 0 is used directly, so nearby stations still
-dominate). If no station within range reports the variable, the cell is `NA`.
-Polygons sharing an `id_field` value are unioned and treated as one region.
-
-**How distance is measured** is set by `dist_from`:
-
-- `"surface"` (default) — from the polygon's representative interior point
-  (`sf::st_point_on_surface()`, always inside, even for concave shapes).
-- `"centroid"` — from the geometric centroid (can fall outside a concave or
-  multi-part region).
-- `"edge"` — from the polygon **boundary**: distance is `0` for any station
-  *inside* the region (so the result becomes the average of the in-region
-  stations), and the border distance for stations outside. Most faithful, but
-  costs an `sf` distance computation.
-
-The recommended flow is **two steps** — download once (section 3), then
-interpolate — so you can re-run with different polygons or settings without
-re-downloading:
-
-```r
-# step 1 — download the measurement data once (see section 3)
-stations <- get_stations()
-obs <- get_weather(stations$station_id, "2024-01-01", "2024-01-07",
-                   type = "daily")
-# (optional) persist across R sessions:
-# saveRDS(list(stations = stations, obs = obs), "cwa_2024w1.rds")
-```
-
-### Example A — Taiwan townships
-
-Load the official boundary layer and key on its township **code** column:
-
-```r
-bnd <- load_tw_townships()          # official NLSC 鄉鎮市區界線 (data.gov.tw 7441)
-
-# step 2 — interpolate to every township (re-run freely, no re-download)
-tw <- get_region_weather(
-  start = "2024-01-01", end = "2024-01-07", type = "daily",
-  shp = bnd, id_field = "townid",   # or "TOWNNAME" if you want the name
-  stations = stations, obs = obs,
-  power = 2, k_nearest = 8, max_dist = NULL
-)
-# regions = c("66000040", "66000050") restricts to a few districts.
-```
-
-Key on `townid` rather than the name: district *names* repeat across Taiwan
-(中山區 is in both 臺北市 and 基隆市), whereas the code is unique. Output:
-`region` (the `townid` values), `obs_time`, one column per interpolated variable,
-and `n_stations` (nearby stations reporting at that step).
-
-### Example B — a 200 km² hexagonal grid (main island only)
-
-Make your own polygons and pass them straight in:
+where $d_i$ is the distance from the polygon to station $i$. The recommended flow
+is two steps — download once, then interpolate — so you can re-run with different
+polygons or settings without re-downloading:
 
 ```r
 library(sf)
 
-# 1. main-island outline: drop the 外島 counties, union, project to metres
-bnd  <- load_tw_townships()
-main <- bnd[!bnd$county %in% c("澎湖縣", "金門縣", "連江縣"), ]
-main <- st_transform(st_union(st_make_valid(main)), 3826)   # TWD97 / TM2 (metres)
+# step 1 — download once
+stations <- get_stations()
+obs <- get_weather(stations$station_id, "2024-01-01", "2024-01-07", type = "daily")
 
-# 2. ~200 km² regular hexagons: build, then rescale cellsize to hit the target
-mk  <- function(cs) st_sf(geometry = st_make_grid(main, cellsize = cs, square = FALSE))
-hex <- mk(15000)
-hex <- mk(15000 * sqrt(200e6 / as.numeric(median(st_area(hex)))))  # ≈ 200 km²
-
-# 3. keep only cells covering land, give each a stable id
-hex <- hex[lengths(st_intersects(hex, main)) > 0, ]
-hex$hex_id <- sprintf("H%04d", seq_len(nrow(hex)))
-
-# 4. interpolate (reuse the cached stations / obs from step 1)
-hw <- get_region_weather(
+# step 2a — interpolate to every Taiwan township (key on the unique code)
+bnd <- load_tw_townships()          # official NLSC layer (data.gov.tw 7441)
+tw  <- get_region_weather(
   start = "2024-01-01", end = "2024-01-07", type = "daily",
-  shp = hex, id_field = "hex_id",
-  stations = stations, obs = obs
+  shp = bnd, id_field = "townid",
+  stations = stations, obs = obs,
+  power = 2, k_nearest = 8
 )
+
+# step 2b — or interpolate to your own polygons (e.g. a hex grid)
+hex <- st_sf(geometry = st_make_grid(st_transform(st_union(bnd), 3826),
+                                     cellsize = 15000, square = FALSE))
+hex$hex_id <- sprintf("H%04d", seq_len(nrow(hex)))
+hw <- get_region_weather("2024-01-01", "2024-01-07", type = "daily",
+                         shp = hex, id_field = "hex_id",
+                         stations = stations, obs = obs)
 ```
 
-Output: `region` (your `hex_id` values), `obs_time`, one column per interpolated
-variable, and `n_stations`. (`get_region_weather()` re-projects `shp` to lon/lat
-internally, so any CRS is fine.)
+Key townships on `townid`, not name: district names repeat across Taiwan
+(中山區 is in both 臺北市 and 基隆市) whereas the code is unique.
 
-### Notes & speed
+## 6. Notes
 
-If you omit `obs` (and `stations`), the function downloads the nearest
-`pool_size` stations to each polygon for you — convenient for a one-off, but the
-two-step `obs=` flow is the fast path when you run repeatedly or cover many
-polygons. The interpolation itself is fast (vectorised matrix algebra); the cost
-is downloading and parsing the station CSVs, so:
+- **Two-step flow is the fast path.** The interpolation is fast (vectorised);
+  the cost is downloading/parsing station CSVs. Fetch `obs` once (optionally
+  `saveRDS()`), then reuse via `obs=` with the **same `stations`** table so
+  coordinates line up. Installing `data.table` further speeds up parsing.
+- **Succession.** When a station is relocated/re-coded its record continues under
+  a successor (e.g. 466880 板橋 → 466881 新北). With `succession = "auto"` a chain
+  is stacked onto one row. Links are inferred from `remark` text by default;
+  supply `id_before` / `id_after` for full accuracy, or set `succession = "off"`.
+- **Monthly `type`.** `end` is automatically extended to the end of its month,
+  because the source returns a month's record only once the window reaches the
+  month end (a sub-month window comes back empty).
+- **Township boundaries are not bundled.** `load_tw_townships()` downloads the
+  NLSC layer from data.gov.tw 7441; that URL embeds a release date and changes
+  occasionally. If it 404s, fetch the current SHP link from
+  <https://data.gov.tw/dataset/7441> and pass it via `source=`.
 
-- **Faster parsing (automatic).** With the suggested [`data.table`](https://cran.r-project.org/package=data.table)
-  installed, CSV parsing uses `data.table::fread`; otherwise a base-R parser is
-  used. Just `install.packages("data.table")`.
-- **Download once, reuse via `obs=`.** Fetch `obs` once (optionally `saveRDS()`),
-  then call `get_region_weather()` as many times as you like with
-  `stations=`/`obs=` — use the **same `stations`** table you built `obs` from so
-  coordinates line up.
+## 7. References & citation
 
-> **monthly note** — for `type = "monthly"` the end date is automatically
-> extended to the end of its month, because the source returns a month's record
-> only once the window reaches the month end (a sub-month window comes back
-> empty — which previously surfaced as all-`NA`).
-
-## Notes
-
-- Station metadata comes from the CODiS `station_list` endpoint
-  (<https://codis.cwa.gov.tw/api/station_list>); if that endpoint moves, pass
-  your own `url=` to `get_stations()`.
-- Township boundaries are **not** bundled. `load_tw_townships()` defaults to the
-  official NLSC 鄉鎮市區界線(TWD97經緯度) shapefile on data.gov.tw
-  (<https://data.gov.tw/dataset/7441>) and unpacks the zip for you. That download
-  URL embeds a release date and changes occasionally — if it 404s, grab the
-  current SHP link from the dataset page (or a local copy) and pass it via
-  `source=`.
-- Data source & terms: CWA CODiS via
-  <https://mycolab.pp.nchu.edu.tw/historical_weather/>.
-
-## References
-
-If you use this package, please cite it together with the underlying data
-sources (APA 7th edition):
+If you use this package, please cite it together with the underlying data sources
+(APA 7th edition):
 
 - Liou, Yu-You. (2026). *twweather: Download Taiwan CWA historical weather
   observations* (Version 0.1.0) [Computer software].
   https://github.com/yyliou/weather
-
 - Central Weather Administration. (n.d.). *Observation Data Inquire System
   (CODiS)* [Data set]. Retrieved June 9, 2026, from https://codis.cwa.gov.tw/
-
 - National Land Surveying and Mapping Center. (n.d.). *鄉鎮市區界線
   (TWD97經緯度) [Township and district administrative boundaries]* [Data set].
   政府資料開放平臺 (data.gov.tw). https://data.gov.tw/dataset/7441
-
 - Raingel. (n.d.). *Taiwan historical meteorological observations database*
   [Computer software]. GitHub. https://github.com/Raingel/historical_weather
-
 - Mou, H., Liu, L., & Xu, Y. (2023). Panel data visualization in R (panelView)
   and Stata (panelview). *Journal of Statistical Software, 107*(7), 1–20.
   https://doi.org/10.18637/jss.v107.i07
-
 - Pebesma, E. (2018). Simple features for R: Standardized support for spatial
-  vector data. *The R Journal, 10*(1), 439–446.
-  https://doi.org/10.32614/RJ-2018-009
+  vector data. *The R Journal, 10*(1), 439–446. https://doi.org/10.32614/RJ-2018-009
