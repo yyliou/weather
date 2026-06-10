@@ -1,4 +1,6 @@
-# twweather <img src="man/figures/logo.png" align="right" height="139" alt="twweather logo" />
+# twweather
+
+<img src="man/figures/logo.png" align="right" height="139" alt="twweather logo" />
 
 ## 1. Overview
 
@@ -63,10 +65,8 @@ only operating stations; `raw = TRUE` returns the provider's original columns.
 | `start`, `end`, `type`, `clean`, `na_codes`, `quiet` | Passed to `get_weather()` when `obs` is not supplied. | — |
 
 **`station_panel(stations, start, end, by, active_only, succession, infer_remark)`**
-and **`plot_station_panel(x, start, end, by, active_only, sort, colors, labels,
-max_labels, label_col, title, xlab, ylab)`** — `by` is `"year"` (default),
-`"month"`, or `"day"`; `sort` is `"start"`/`"duration"`/`"succession"`/`"id"`/
-`"name"`/`"none"`; `succession` is `"auto"` (default) or `"off"`.
+and **`plot_station_panel(x, start, end, by, active_only, sort, colors, labels, max_labels, label_col, title, xlab, ylab)`** — `by` is `"year"` (default),
+`"month"`, or `"day"`; `sort` is `"start"`/`"duration"`/`"succession"`/`"id"`/`"name"`/`"none"`; `succession` is `"auto"` (default) or `"off"`.
 
 ## 4. Output codebook
 
@@ -102,7 +102,7 @@ library(twweather)
 st <- get_stations()
 
 # Measurement data: one station hourly, or several daily
-w  <- get_weather("467490", "2024-01-01", "2024-01-07")
+w <- get_weather("467490", "2024-01-01", "2024-01-07")
 wd <- get_weather(c("466920", "466930"), "2024-01-01", "2024-01-31",
                   type = "daily")
 
@@ -110,9 +110,13 @@ wd <- get_weather(c("466920", "466930"), "2024-01-01", "2024-01-31",
 plot_station_panel(start = "1990-01-01", end = "2024-12-31", by = "year")
 ```
 
-The IDW value for each *polygon × time step × variable* is
+<img src="man/figures/station-panel.png" alt="Station operating status panel" width="100%" />
 
-$$ v = \frac{\sum_i w_i\,x_i}{\sum_i w_i}, \qquad w_i = \frac{1}{d_i^{\,\text{power}}} $$
+The IDW value for each polygon × time step × variable is
+
+$$
+v = \frac{\sum_i w_i\,x_i}{\sum_i w_i}, \qquad w_i = \frac{1}{d_i^{\,\text{power}}}
+$$
 
 where $d_i$ is the distance from the polygon to station $i$. The recommended flow
 is two steps — download once, then interpolate — so you can re-run with different
@@ -126,8 +130,8 @@ stations <- get_stations()
 obs <- get_weather(stations$station_id, "2024-01-01", "2024-01-07", type = "daily")
 
 # step 2a — interpolate to every Taiwan township (key on the unique code)
-bnd <- load_tw_townships()          # official NLSC layer (data.gov.tw 7441)
-tw  <- get_region_weather(
+bnd <- load_tw_townships()   # official NLSC layer (data.gov.tw 7441)
+tw <- get_region_weather(
   start = "2024-01-01", end = "2024-01-07", type = "daily",
   shp = bnd, id_field = "townid",
   stations = stations, obs = obs,
@@ -170,8 +174,7 @@ If you use this package, please cite it together with the underlying data source
 (APA 7th edition):
 
 - Liou, Yu-You. (2026). *twweather: Download Taiwan CWA historical weather
-  observations* (Version 0.1.0) [Computer software].
-  https://github.com/yyliou/weather
+  observations* (Version 0.1.0) [Computer software]. https://github.com/yyliou/weather
 - Central Weather Administration. (n.d.). *Observation Data Inquire System
   (CODiS)* [Data set]. Retrieved June 9, 2026, from https://codis.cwa.gov.tw/
 - National Land Surveying and Mapping Center. (n.d.). *鄉鎮市區界線
@@ -183,4 +186,4 @@ If you use this package, please cite it together with the underlying data source
   and Stata (panelview). *Journal of Statistical Software, 107*(7), 1–20.
   https://doi.org/10.18637/jss.v107.i07
 - Pebesma, E. (2018). Simple features for R: Standardized support for spatial
-  vector data. *The R Journal, 10*(1), 439–446. https://doi.org/10.32614
+  vector data. *The R Journal, 10*(1), 439–446. https://doi.org/10.32614/RJ-2018-009
