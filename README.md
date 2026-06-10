@@ -1,10 +1,4 @@
-<<<<<<< HEAD
 # twweather
-
-<img src="man/figures/logo.png" align="right" height="139" alt="twweather logo" />
-=======
-# twweather 
->>>>>>> deb9bc33689bb3b7f298ec4de31bcc432a8ceec7
 
 ## 1. Overview <img src="man/figures/logo.png" align="right" height="139" alt="twweather logo" />
 
