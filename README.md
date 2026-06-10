@@ -1,6 +1,6 @@
-# twweather <img src="man/figures/logo.png" align="right" height="139" alt="twweather logo" />
+# twweather 
 
-## 1. Overview
+## 1. Overview <img src="man/figures/logo.png" align="right" height="139" alt="twweather logo" />
 
 `twweather` downloads Taiwan historical weather observations from the NCHU
 [*CWB Historical Weather Data Downloader*](https://mycolab.pp.nchu.edu.tw/historical_weather/index.php),
