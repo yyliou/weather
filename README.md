@@ -1,8 +1,8 @@
-# twweather 
+# twweather <img src="man/figures/logo.png" align="right" height="139" alt="twweather logo" />
 
-## 1. Overview <img src="man/figures/logo.png" align="right" height="139" alt="twweather logo" />
+## 1. Overview
 
-`twweather` downloads Taiwan historical weather observations from the NCHU 
+`twweather` downloads Taiwan historical weather observations from the NCHU
 [*CWB Historical Weather Data Downloader*](https://mycolab.pp.nchu.edu.tw/historical_weather/index.php),
 which redistributes Central Weather Administration (CWA / CODiS) station data. It
 provides station metadata, station observation time series (hourly / daily /
@@ -184,3 +184,4 @@ If you use this package, please cite it together with the underlying data source
   https://doi.org/10.18637/jss.v107.i07
 - Pebesma, E. (2018). Simple features for R: Standardized support for spatial
   vector data. *The R Journal, 10*(1), 439–446. https://doi.org/10.32614/RJ-2018-009
+  
